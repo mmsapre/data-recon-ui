@@ -1,15 +1,16 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { api, loadConnection, saveConnection } from "./api";
+import { api, loadConnection, saveConnection, selectEnv, updateCurrentUrls } from "./api";
 import { runAgent, filterCatalog } from "./agent";
+import { ENVS } from "./config";
 import type { AgentAction } from "./agent";
-import type { Connection, Datasource, Domain, Page, RecRecord, Run } from "./types";
+import type { Connection, Datasource, Domain, EnvName, Page, RecRecord, Run, TriggerFocus } from "./types";
 
 const PAGES: { id: Page; label: string }[] = [
-  { id: "catalog", label: "Catalog" },
+  { id: "catalog", label: "Search & run" },
   { id: "run", label: "Run recon" },
-  { id: "results", label: "Results" },
+  { id: "results", label: "Audit" },
   { id: "setup", label: "Setup" },
-  { id: "agent", label: "Agent" },
+  { id: "agent", label: "Agent chat" },
 ];
 
 export default function App() {
@@ -22,10 +23,18 @@ export default function App() {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [domainId, setDomainId] = useState("");
   const [profileId, setProfileId] = useState("");
+  const [focusRunId, setFocusRunId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const domain = domains.find((item) => item.id === domainId);
   const profiles = domain?.profiles ?? [];
+
+  function openAudit(focus: TriggerFocus) {
+    setDomainId(focus.domainId);
+    setProfileId(focus.profileId ?? "");
+    setFocusRunId(focus.runId ?? null);
+    setPage("results");
+  }
 
   useEffect(() => {
     saveConnection(connection);
@@ -56,7 +65,11 @@ export default function App() {
     setNotice(null);
     try {
       await refresh();
-      setNotice("Connected to Data Recon.");
+      setNotice(
+        `Connected to ${connection.env.toUpperCase()} backend ${connection.backendUrl || "/api"}. Agent: ${
+          connection.agentUrl?.trim() || "local tools on backend"
+        }.`,
+      );
     } catch (err) {
       setConnected(false);
       setError(message(err));
@@ -81,6 +94,45 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <div className="field">
+          <label>Environment</label>
+          <select
+            value={connection.env}
+            onChange={(event) => {
+              setConnection(selectEnv(connection, event.target.value as EnvName));
+              setConnected(false);
+            }}
+          >
+            {ENVS.map((name) => (
+              <option key={name} value={name}>
+                {name.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Backend URL</label>
+          <input
+            className="url"
+            placeholder="http://localhost:8080"
+            value={connection.backendUrl}
+            onChange={(event) => {
+              setConnection(updateCurrentUrls(connection, { backendUrl: event.target.value }));
+              setConnected(false);
+            }}
+          />
+        </div>
+        <div className="field">
+          <label>Agent URL</label>
+          <input
+            className="url"
+            placeholder="optional separate agent"
+            value={connection.agentUrl}
+            onChange={(event) => {
+              setConnection(updateCurrentUrls(connection, { agentUrl: event.target.value }));
+            }}
+          />
+        </div>
         <div className="field">
           <label>Username</label>
           <input
@@ -114,11 +166,7 @@ export default function App() {
             onError={setError}
             onNotice={setNotice}
             onRefresh={() => void refresh()}
-            onOpen={(nextDomain, nextProfile) => {
-              setDomainId(nextDomain);
-              setProfileId(nextProfile);
-              setPage("run");
-            }}
+            onTriggered={openAudit}
           />
         ) : null}
         {page === "run" ? (
@@ -133,17 +181,17 @@ export default function App() {
             onBusy={setBusy}
             onError={setError}
             onNotice={setNotice}
+            onTriggered={openAudit}
           />
         ) : null}
         {page === "results" ? (
           <ResultsPage
             connection={connection}
             domains={domains}
-            domainId={domainId}
-            profileId={profileId}
-            onDomain={setDomainId}
-            onProfile={setProfileId}
+            connected={connected}
+            focusRunId={focusRunId}
             onError={setError}
+            onClearFocus={() => setFocusRunId(null)}
           />
         ) : null}
         {page === "setup" ? (
@@ -164,6 +212,7 @@ export default function App() {
             domains={domains}
             connected={connected}
             onRefresh={() => void refresh()}
+            onTriggered={openAudit}
           />
         ) : null}
       </main>
@@ -181,7 +230,7 @@ function CatalogPage({
   onError,
   onNotice,
   onRefresh,
-  onOpen,
+  onTriggered,
 }: {
   connection: Connection;
   datasources: Datasource[];
@@ -192,9 +241,11 @@ function CatalogPage({
   onError: (value: string | null) => void;
   onNotice: (value: string | null) => void;
   onRefresh: () => void;
-  onOpen: (domainId: string, profileId: string) => void;
+  onTriggered: (focus: TriggerFocus) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState("");
+  const [fields, setFields] = useState("");
   const [attachDomain, setAttachDomain] = useState("");
   const [attachProfile, setAttachProfile] = useState("");
   const [sourceDs, setSourceDs] = useState("");
@@ -244,18 +295,46 @@ function CatalogPage({
     }
   }
 
+  async function triggerDomain(id: string) {
+    onBusy(true);
+    onError(null);
+    try {
+      const result = await api.runDomain(connection, id, runBody(mode, fields));
+      onNotice(`Triggered domain ${id} (domain run ${result.domainRunId}).`);
+      onTriggered({ domainId: id, runId: result.domainRunId });
+    } catch (err) {
+      onError(message(err));
+    } finally {
+      onBusy(false);
+    }
+  }
+
+  async function triggerProfile(nextDomain: string, nextProfile: string) {
+    onBusy(true);
+    onError(null);
+    try {
+      const result = await api.runProfile(connection, nextDomain, nextProfile, runBody(mode, fields));
+      onNotice(`Triggered ${nextDomain}.${nextProfile} (run ${result.runId}).`);
+      onTriggered({ domainId: nextDomain, profileId: nextProfile, runId: result.runId });
+    } catch (err) {
+      onError(message(err));
+    } finally {
+      onBusy(false);
+    }
+  }
+
   if (!connected) {
     return (
       <>
-        <h1>Catalog</h1>
-        <p className="lede">Connect in the sidebar to load named datasources, domains, and profiles.</p>
+        <h1>Search & run</h1>
+        <p className="lede">Connect in the sidebar, then search a domain or profile and trigger recon.</p>
       </>
     );
   }
   return (
     <>
-      <h1>Catalog</h1>
-      <p className="lede">Search domains and profiles, then attach named datasources to a pairing.</p>
+      <h1>Search & run</h1>
+      <p className="lede">Search domains and profiles, then trigger the whole domain or one profile. Audit opens on the new run.</p>
       <div className="row">
         <div className="field" style={{ minWidth: 280, flex: 1 }}>
           <label>Search domains and profiles</label>
@@ -263,6 +342,23 @@ function CatalogPage({
             placeholder="party, pg-csv, mongo…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>Mode</label>
+          <select value={mode} onChange={(event) => setMode(event.target.value)}>
+            <option value="">Profile default</option>
+            <option value="COUNTS">COUNTS</option>
+            <option value="MISMATCH_DETAILS">MISMATCH_DETAILS</option>
+            <option value="FIELD_DETAILS">FIELD_DETAILS</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Condition fields</label>
+          <input
+            placeholder="party_name, status"
+            value={fields}
+            onChange={(event) => setFields(event.target.value)}
           />
         </div>
       </div>
@@ -296,12 +392,22 @@ function CatalogPage({
           </button>
         </div>
       </form>
-      {filtered.map((domain) => (
-        <section key={domain.id} className="card">
-          <h2>
-            {domain.id}
-            {domain.schedule ? ` · ${domain.schedule}` : ""}
-          </h2>
+      {filtered.map((item) => (
+        <section key={item.id} className="card">
+          <div className="card-head">
+            <h2>
+              {item.id}
+              {item.schedule ? ` · ${item.schedule}` : ""}
+            </h2>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => void triggerDomain(item.id)}
+            >
+              Run domain
+            </button>
+          </div>
           <table>
             <thead>
               <tr>
@@ -314,7 +420,7 @@ function CatalogPage({
               </tr>
             </thead>
             <tbody>
-              {domain.profiles.map((profile) => (
+              {item.profiles.map((profile) => (
                 <tr key={profile.id}>
                   <td>{profile.profileId}</td>
                   <td>
@@ -331,9 +437,10 @@ function CatalogPage({
                     <button
                       type="button"
                       className="btn secondary"
-                      onClick={() => onOpen(domain.id, profile.profileId)}
+                      disabled={busy}
+                      onClick={() => void triggerProfile(item.id, profile.profileId)}
                     >
-                      Run
+                      Run profile
                     </button>
                   </td>
                 </tr>
@@ -358,6 +465,7 @@ function RunPage({
   onBusy,
   onError,
   onNotice,
+  onTriggered,
 }: {
   connection: Connection;
   domains: Domain[];
@@ -369,6 +477,7 @@ function RunPage({
   onBusy: (value: boolean) => void;
   onError: (value: string | null) => void;
   onNotice: (value: string | null) => void;
+  onTriggered: (focus: TriggerFocus) => void;
 }) {
   const domain = domains.find((item) => item.id === domainId);
   const [scope, setScope] = useState<"domain" | "profile">("profile");
@@ -384,20 +493,19 @@ function RunPage({
     }
     onBusy(true);
     onError(null);
-    const body = {
-      mode: mode || undefined,
-      conditionFields: splitList(fields),
-    };
+    const body = runBody(mode, fields);
     try {
       if (scope === "domain") {
         const result = await api.runDomain(connection, domainId, body);
         onNotice(`Domain run ${result.domainRunId} accepted for ${Object.keys(result.runIds).length} profile(s).`);
+        onTriggered({ domainId, runId: result.domainRunId });
       } else {
         if (!profileId) {
           throw new Error("Select a profile.");
         }
         const result = await api.runProfile(connection, domainId, profileId, body);
         onNotice(`Profile run ${result.runId} accepted for ${domainId}.${profileId}.`);
+        onTriggered({ domainId, profileId, runId: result.runId });
       }
     } catch (err) {
       onError(message(err));
@@ -409,7 +517,7 @@ function RunPage({
   return (
     <>
       <h1>Run recon</h1>
-      <p className="lede">Trigger a domain (all profiles) or a single source/target pairing. Mode is optional.</p>
+      <p className="lede">Trigger a domain (all profiles) or a single source/target pairing. Audit opens on the accepted run.</p>
       <div className="row">
         <div className="field" style={{ minWidth: 200, flex: 1 }}>
           <label>Search</label>
@@ -465,31 +573,32 @@ function RunPage({
 function ResultsPage({
   connection,
   domains,
-  domainId,
-  profileId,
-  onDomain,
-  onProfile,
+  connected,
+  focusRunId,
   onError,
+  onClearFocus,
 }: {
   connection: Connection;
   domains: Domain[];
-  domainId: string;
-  profileId: string;
-  onDomain: (id: string) => void;
-  onProfile: (id: string) => void;
+  connected: boolean;
+  focusRunId: number | null;
   onError: (value: string | null) => void;
+  onClearFocus: () => void;
 }) {
-  const domain = domains.find((item) => item.id === domainId);
-  const [activeOnly, setActiveOnly] = useState(true);
-  const [scope, setScope] = useState<"domain" | "profile">("profile");
+  const [filterDomain, setFilterDomain] = useState("");
+  const [filterProfile, setFilterProfile] = useState("");
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<"all" | "domain" | "profile">("all");
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [runStatus, setRunStatus] = useState("");
   const [runs, setRuns] = useState<Run[]>([]);
   const [selected, setSelected] = useState<Run | null>(null);
-  const [status, setStatus] = useState("");
+  const [recordStatus, setRecordStatus] = useState("");
   const [records, setRecords] = useState<RecRecord[]>([]);
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
-    if (!domainId) {
+    if (!connected) {
       setRuns([]);
       setSelected(null);
       return;
@@ -498,18 +607,11 @@ function ResultsPage({
     const load = async () => {
       onError(null);
       try {
-        const list =
-          scope === "domain"
-            ? await api.domainRuns(connection, domainId, activeOnly || undefined)
-            : profileId
-              ? await api.profileRuns(connection, domainId, profileId, activeOnly || undefined)
-              : [];
+        const list = await api.runs(connection);
         if (cancelled) {
           return;
         }
-        const profileRuns = list.filter((run) => run.profileId);
-        setRuns(profileRuns);
-        setSelected(profileRuns[0] ?? null);
+        setRuns(list);
       } catch (err) {
         if (!cancelled) {
           onError(message(err));
@@ -520,144 +622,358 @@ function ResultsPage({
     return () => {
       cancelled = true;
     };
-  }, [domainId, profileId, scope, activeOnly, connection, onError, reloadToken]);
+  }, [connected, connection, onError, reloadToken]);
+
+  const domain = domains.find((item) => item.id === filterDomain);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return runs.filter((run) => {
+      if (filterDomain && run.domainId !== filterDomain) {
+        return false;
+      }
+      if (filterProfile && run.profileId !== filterProfile) {
+        return false;
+      }
+      if (kind === "domain" && run.profileId) {
+        return false;
+      }
+      if (kind === "profile" && !run.profileId) {
+        return false;
+      }
+      if (activeOnly && !run.active) {
+        return false;
+      }
+      if (runStatus && run.status !== runStatus) {
+        return false;
+      }
+      if (!needle) {
+        return true;
+      }
+      return [String(run.id), run.domainId, run.profileId, run.status, run.reconMode, String(run.domainRunId ?? "")]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle));
+    });
+  }, [runs, filterDomain, filterProfile, kind, activeOnly, runStatus, query]);
 
   useEffect(() => {
-    if (!selected) {
+    if (focusRunId) {
+      const focused = runs.find((run) => run.id === focusRunId) ?? filtered.find((run) => run.id === focusRunId);
+      if (focused) {
+        setSelected(focused);
+      }
+      return;
+    }
+    if (filtered.length === 0) {
+      setSelected(null);
+      return;
+    }
+    setSelected((current) => {
+      if (current && filtered.some((run) => run.id === current.id)) {
+        return filtered.find((run) => run.id === current.id) ?? current;
+      }
+      return filtered[0];
+    });
+  }, [filtered, focusRunId, runs]);
+
+  useEffect(() => {
+    if (!selected || !selected.profileId) {
       setRecords([]);
       return;
     }
     void api
-      .records(connection, selected.id, status || undefined)
+      .records(connection, selected.id, recordStatus || undefined)
       .then(setRecords)
       .catch((err) => onError(message(err)));
-  }, [selected, status, connection, onError]);
+  }, [selected, recordStatus, connection, onError]);
 
-  const selectedRun = selected;
+  useEffect(() => {
+    if (!runs.some((run) => run.status === "RUNNING")) {
+      return;
+    }
+    const timer = window.setInterval(() => setReloadToken((value) => value + 1), 3000);
+    return () => window.clearInterval(timer);
+  }, [runs]);
+
+  const profileTotals = filtered.filter((run) => run.profileId);
+  const childRuns = selected && !selected.profileId
+    ? runs.filter((run) => run.domainRunId === selected.id && run.profileId)
+    : [];
+
+  function pickRun(run: Run) {
+    setSelected(run);
+    if (focusRunId && run.id !== focusRunId) {
+      onClearFocus();
+    }
+  }
+
+  if (!connected) {
+    return (
+      <>
+        <h1>Audit</h1>
+        <p className="lede">Connect in the sidebar to load every recon run and its stored results.</p>
+      </>
+    );
+  }
 
   return (
     <>
-      <h1>Results</h1>
-      <p className="lede">Stored run counts and per-key hashes. Business values are never shown.</p>
+      <h1>Audit</h1>
+      <p className="lede">
+        Every domain and profile run, with counts and per-key hashes. Trigger from Search & run, then inspect here.
+      </p>
       <div className="row">
-        <SelectField label="Domain" value={domainId} onChange={onDomain} options={domains.map((item) => item.id)} />
+        <div className="field" style={{ minWidth: 180, flex: 1 }}>
+          <label>Search runs</label>
+          <input
+            placeholder="run id, domain, profile, status…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
         <div className="field">
-          <label>Scope</label>
-          <select value={scope} onChange={(event) => setScope(event.target.value as "domain" | "profile")}>
-            <option value="profile">One profile</option>
-            <option value="domain">Whole domain</option>
+          <label>Domain</label>
+          <select
+            value={filterDomain}
+            onChange={(event) => {
+              setFilterDomain(event.target.value);
+              setFilterProfile("");
+              onClearFocus();
+            }}
+          >
+            <option value="">All domains</option>
+            {domains.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id}
+              </option>
+            ))}
           </select>
         </div>
-        {scope === "profile" ? (
-          <SelectField
-            label="Profile"
-            value={profileId}
-            onChange={onProfile}
-            options={domain?.profiles.map((item) => item.profileId) ?? []}
-          />
-        ) : null}
         <div className="field">
-          <label>Active only</label>
+          <label>Profile</label>
+          <select
+            value={filterProfile}
+            onChange={(event) => {
+              setFilterProfile(event.target.value);
+              onClearFocus();
+            }}
+            disabled={!filterDomain}
+          >
+            <option value="">All profiles</option>
+            {(domain?.profiles ?? []).map((item) => (
+              <option key={item.profileId} value={item.profileId}>
+                {item.profileId}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Kind</label>
+          <select value={kind} onChange={(event) => setKind(event.target.value as "all" | "domain" | "profile")}>
+            <option value="all">Domain + profile</option>
+            <option value="domain">Domain runs</option>
+            <option value="profile">Profile runs</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Run status</label>
+          <select value={runStatus} onChange={(event) => setRunStatus(event.target.value)}>
+            <option value="">All</option>
+            <option value="RUNNING">RUNNING</option>
+            <option value="COMPLETED">COMPLETED</option>
+            <option value="FAILED">FAILED</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Latest only</label>
           <select value={activeOnly ? "yes" : "no"} onChange={(event) => setActiveOnly(event.target.value === "yes")}>
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
+            <option value="no">All history</option>
+            <option value="yes">Active only</option>
           </select>
         </div>
         <button className="btn secondary" onClick={() => setReloadToken((value) => value + 1)}>
           Reload
         </button>
       </div>
-      {selectedRun ? (
-        <div className="metrics">
-          <Metric label="Source" value={selectedRun.sourceCount} />
-          <Metric label="Target" value={selectedRun.targetCount} />
-          <Metric label="Matched" value={selectedRun.matchedCount} tone="ok" />
-          <Metric label="Mismatched" value={selectedRun.mismatchedCount} tone="bad" />
-          <Metric label="Source only" value={selectedRun.sourceOnlyCount} />
-          <Metric label="Target only" value={selectedRun.targetOnlyCount} />
-        </div>
-      ) : null}
-      <table>
-        <thead>
-          <tr>
-            <th>Run</th>
-            <th>Profile</th>
-            <th>Status</th>
-            <th>Mode</th>
-            <th>Active</th>
-            <th>Started</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <tr
-              key={run.id}
-              className={`clickable${selectedRun?.id === run.id ? " selected" : ""}`}
-              onClick={() => setSelected(run)}
-            >
-              <td>{run.id}</td>
-              <td>{run.profileId}</td>
-              <td className={`status ${run.status}`}>{run.status}</td>
-              <td>{run.reconMode}</td>
-              <td>{run.active ? "yes" : ""}</td>
-              <td>{formatTime(run.startedAt)}</td>
+      <div className="metrics">
+        <Metric label="Runs" value={filtered.length} />
+        <Metric label="Running" value={filtered.filter((run) => run.status === "RUNNING").length} />
+        <Metric label="Failed" value={filtered.filter((run) => run.status === "FAILED").length} tone="bad" />
+        <Metric
+          label="Mismatched keys"
+          value={profileTotals.reduce((sum, run) => sum + (run.mismatchedCount ?? 0), 0)}
+          tone="bad"
+        />
+        <Metric
+          label="Matched keys"
+          value={profileTotals.reduce((sum, run) => sum + (run.matchedCount ?? 0), 0)}
+          tone="ok"
+        />
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>Kind</th>
+              <th>Domain</th>
+              <th>Profile</th>
+              <th>Domain run</th>
+              <th>Status</th>
+              <th>Mode</th>
+              <th>Active</th>
+              <th>Src</th>
+              <th>Tgt</th>
+              <th>Match</th>
+              <th>Mismatch</th>
+              <th>Src only</th>
+              <th>Tgt only</th>
+              <th>Started</th>
+              <th>Completed</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {runs.length === 0 ? <p className="empty">No runs yet.</p> : null}
-      {selectedRun?.sourceQuery || selectedRun?.targetQuery ? (
-        <div className="row" style={{ marginTop: "1rem" }}>
-          {selectedRun.sourceQuery ? (
-            <div className="field" style={{ flex: 1 }}>
-              <label>Source query</label>
-              <pre className="query">{selectedRun.sourceQuery}</pre>
-            </div>
-          ) : null}
-          {selectedRun.targetQuery ? (
-            <div className="field" style={{ flex: 1 }}>
-              <label>Target query</label>
-              <pre className="query">{selectedRun.targetQuery}</pre>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      {selectedRun ? (
-        <>
-          <div className="row" style={{ marginTop: "1rem" }}>
-            <div className="field">
-              <label>Record status</label>
-              <select value={status} onChange={(event) => setStatus(event.target.value)}>
-                <option value="">All stored rows</option>
-                <option value="MISMATCHED">MISMATCHED</option>
-                <option value="SOURCE_ONLY">SOURCE_ONLY</option>
-                <option value="TARGET_ONLY">TARGET_ONLY</option>
-              </select>
-            </div>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>MigrationKey</th>
-                <th>Status</th>
-                <th>Source hash</th>
-                <th>Target hash</th>
-                <th>Field diffs</th>
+          </thead>
+          <tbody>
+            {filtered.map((run) => (
+              <tr
+                key={run.id}
+                className={`clickable${selected?.id === run.id ? " selected" : ""}`}
+                onClick={() => pickRun(run)}
+              >
+                <td>{run.id}</td>
+                <td>{run.profileId ? "profile" : "domain"}</td>
+                <td>{run.domainId}</td>
+                <td>{run.profileId ?? "—"}</td>
+                <td>{run.domainRunId ?? (run.profileId ? "—" : run.id)}</td>
+                <td className={`status ${run.status}`}>{run.status}</td>
+                <td>{run.reconMode}</td>
+                <td>{run.active ? "yes" : ""}</td>
+                <td>{run.sourceCount}</td>
+                <td>{run.targetCount}</td>
+                <td>{run.matchedCount}</td>
+                <td className={run.mismatchedCount ? "status MISMATCHED" : ""}>{run.mismatchedCount}</td>
+                <td>{run.sourceOnlyCount}</td>
+                <td>{run.targetOnlyCount}</td>
+                <td>{formatTime(run.startedAt)}</td>
+                <td>{formatTime(run.completedAt)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {records.map((record) => (
-                <tr key={record.migrationKey}>
-                  <td className="mono">{record.migrationKey}</td>
-                  <td className={`status ${record.status}`}>{record.status}</td>
-                  <td className="mono">{record.sourceHash}</td>
-                  <td className="mono">{record.targetHash}</td>
-                  <td className="mono">{record.fieldDiffs}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {records.length === 0 ? <p className="empty">No detail rows for this filter (COUNTS runs store none).</p> : null}
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {filtered.length === 0 ? <p className="empty">No runs match these filters.</p> : null}
+      {selected ? (
+        <>
+          <h2 className="section-title">
+            {selected.profileId
+              ? `Profile result ${selected.domainId}.${selected.profileId} · run ${selected.id}`
+              : `Domain result ${selected.domainId} · domain run ${selected.id}`}
+          </h2>
+          {selected.errorMessage ? <div className="banner error">{selected.errorMessage}</div> : null}
+          <div className="metrics">
+            <Metric label="Source" value={selected.sourceCount} />
+            <Metric label="Target" value={selected.targetCount} />
+            <Metric label="Matched" value={selected.matchedCount} tone="ok" />
+            <Metric label="Mismatched" value={selected.mismatchedCount} tone="bad" />
+            <Metric label="Source only" value={selected.sourceOnlyCount} />
+            <Metric label="Target only" value={selected.targetOnlyCount} />
+          </div>
+          {selected.sourceQuery || selected.targetQuery ? (
+            <div className="row">
+              {selected.sourceQuery ? (
+                <div className="field" style={{ flex: 1 }}>
+                  <label>Source query</label>
+                  <pre className="query">{selected.sourceQuery}</pre>
+                </div>
+              ) : null}
+              {selected.targetQuery ? (
+                <div className="field" style={{ flex: 1 }}>
+                  <label>Target query</label>
+                  <pre className="query">{selected.targetQuery}</pre>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {childRuns.length > 0 ? (
+            <>
+              <h3 className="section-title">Profiles in this domain run</h3>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Run</th>
+                      <th>Profile</th>
+                      <th>Status</th>
+                      <th>Match</th>
+                      <th>Mismatch</th>
+                      <th>Src only</th>
+                      <th>Tgt only</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {childRuns.map((run) => (
+                      <tr
+                        key={run.id}
+                        className="clickable"
+                        onClick={() => pickRun(run)}
+                      >
+                        <td>{run.id}</td>
+                        <td>{run.profileId}</td>
+                        <td className={`status ${run.status}`}>{run.status}</td>
+                        <td>{run.matchedCount}</td>
+                        <td className={run.mismatchedCount ? "status MISMATCHED" : ""}>{run.mismatchedCount}</td>
+                        <td>{run.sourceOnlyCount}</td>
+                        <td>{run.targetOnlyCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
+          {selected.profileId ? (
+            <>
+              <div className="row">
+                <div className="field">
+                  <label>Record status</label>
+                  <select value={recordStatus} onChange={(event) => setRecordStatus(event.target.value)}>
+                    <option value="">All stored rows</option>
+                    <option value="MISMATCHED">MISMATCHED</option>
+                    <option value="SOURCE_ONLY">SOURCE_ONLY</option>
+                    <option value="TARGET_ONLY">TARGET_ONLY</option>
+                    <option value="MATCHED">MATCHED</option>
+                  </select>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>MigrationKey</th>
+                      <th>Status</th>
+                      <th>Source hash</th>
+                      <th>Target hash</th>
+                      <th>Field diffs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map((record) => (
+                      <tr key={record.migrationKey}>
+                        <td className="mono">{record.migrationKey}</td>
+                        <td className={`status ${record.status}`}>{record.status}</td>
+                        <td className="mono">{record.sourceHash}</td>
+                        <td className="mono">{record.targetHash}</td>
+                        <td className="mono">{record.fieldDiffs}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {records.length === 0 ? (
+                <p className="empty">No detail rows for this filter (COUNTS runs store none).</p>
+              ) : null}
+            </>
+          ) : (
+            <p className="empty">Select a profile row above to inspect per-key hashes.</p>
+          )}
         </>
       ) : null}
     </>
@@ -845,6 +1161,7 @@ type ChatItem = {
   text: string;
   reasoning?: string[];
   actions?: AgentAction[];
+  focus?: TriggerFocus;
 };
 
 function AgentPage({
@@ -852,21 +1169,27 @@ function AgentPage({
   domains,
   connected,
   onRefresh,
+  onTriggered,
 }: {
   connection: Connection;
   domains: Domain[];
   connected: boolean;
   onRefresh: () => void;
+  onTriggered: (focus: TriggerFocus) => void;
 }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [messages, setMessages] = useState<ChatItem[]>([
     {
       role: "assistant",
-      text: "Ask me to search, attach a datasource, or trigger a recon. I will show the reasoning before I call Data Recon.",
+      text: "Ask me to search, attach a datasource, or trigger a recon. Every reasoning step stays visible.",
       reasoning: [
-        "This tab is a small tool-using agent over the Data Recon API.",
-        "Examples: “search pg-csv”, “attach landing and mongo to party pg-mongo”, “run party pg-pg COUNTS”.",
+        "This tab talks to a separate agent URL when one is set for the environment.",
+        "Empty Agent URL uses the local tool agent against the Backend URL.",
+        "Search: “search csv”, “list party”, “show me pg-mongo”.",
+        "Trigger a profile: “run party pg-pg” or “trigger party pg-csv COUNTS”.",
+        "Trigger a whole domain: “run party” or “start recon for party”.",
+        "Attach: “attach landing and mongo to party pg-mongo”.",
       ],
     },
   ]);
@@ -878,31 +1201,50 @@ function AgentPage({
       return;
     }
     setInput("");
-    setMessages((current) => [...current, { role: "user", text: utterance }]);
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: utterance },
+      { role: "assistant", text: "Working…", reasoning: [] },
+    ]);
     setBusy(true);
     try {
-      const reply = await runAgent(connection, domains, utterance);
-      setMessages((current) => [
-        ...current,
-        {
+      const reply = await runAgent(connection, domains, utterance, (steps) => {
+        setMessages((current) => {
+          const next = [...current];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = { ...last, reasoning: steps };
+          }
+          return next;
+        });
+      });
+      setMessages((current) => {
+        const next = [...current];
+        next[next.length - 1] = {
           role: "assistant",
           text: reply.text,
           reasoning: reply.reasoning,
           actions: reply.actions,
-        },
-      ]);
+          focus: reply.focus,
+        };
+        return next;
+      });
       if (reply.actions.some((action) => action.name !== "search")) {
         onRefresh();
       }
     } catch (err) {
-      setMessages((current) => [
-        ...current,
-        {
+      setMessages((current) => {
+        const next = [...current];
+        const last = next[next.length - 1];
+        next[next.length - 1] = {
           role: "assistant",
           text: message(err),
-          reasoning: ["The API call failed after the plan was built."],
-        },
-      ]);
+          reasoning: last?.reasoning?.length
+            ? [...last.reasoning, "The API call failed after the plan was built."]
+            : ["The API call failed after the plan was built."],
+        };
+        return next;
+      });
     } finally {
       setBusy(false);
     }
@@ -911,7 +1253,7 @@ function AgentPage({
   if (!connected) {
     return (
       <>
-        <h1>Agent</h1>
+        <h1>Agent chat</h1>
         <p className="lede">Connect first so the agent can see domains and trigger runs.</p>
       </>
     );
@@ -919,21 +1261,23 @@ function AgentPage({
 
   return (
     <div className="chat-page">
-      <h1>Agent</h1>
-      <p className="lede">Chat to search, attach datasources, and trigger recon. Reasoning is shown on every reply.</p>
+      <h1>Agent chat</h1>
+      <p className="lede">
+        Chat to search, attach datasources, and trigger a domain or profile. All reasoning is shown on every reply.
+      </p>
       <div className="chat-log">
         {messages.map((item, index) => (
           <article key={index} className={`bubble ${item.role}`}>
             <div className="bubble-role">{item.role === "user" ? "You" : "Agent"}</div>
             {item.reasoning && item.reasoning.length > 0 ? (
-              <details className="reasoning" open>
-                <summary>Reasoning</summary>
+              <div className="reasoning">
+                <div className="reasoning-title">All reasoning</div>
                 <ol>
                   {item.reasoning.map((step, stepIndex) => (
                     <li key={stepIndex}>{step}</li>
                   ))}
                 </ol>
-              </details>
+              </div>
             ) : null}
             {item.actions && item.actions.length > 0 ? (
               <div className="actions">
@@ -944,19 +1288,24 @@ function AgentPage({
                 ))}
               </div>
             ) : null}
+            {item.focus?.runId ? (
+              <button type="button" className="btn secondary" onClick={() => onTriggered(item.focus!)}>
+                View run {item.focus.runId} in Audit
+              </button>
+            ) : null}
             <pre className="bubble-text">{item.text}</pre>
           </article>
         ))}
-        {busy ? <div className="bubble assistant">Planning and calling Data Recon…</div> : null}
       </div>
       <form className="chat-input" onSubmit={(event) => void send(event)}>
         <input
           value={input}
           placeholder="run party pg-pg · search csv · attach landing and bq to party pg-bigquery"
           onChange={(event) => setInput(event.target.value)}
+          disabled={busy}
         />
-        <button className="btn" disabled={busy}>
-          Send
+        <button className="btn" disabled={busy || !input.trim()}>
+          {busy ? "Working…" : "Send"}
         </button>
       </form>
     </div>
@@ -996,6 +1345,14 @@ function Metric({ label, value, tone }: { label: string; value: number; tone?: "
       <div className="value">{value}</div>
     </div>
   );
+}
+
+function runBody(mode: string, fields: string): { mode?: string; conditionFields?: string[] } {
+  const conditionFields = splitList(fields);
+  return {
+    mode: mode || undefined,
+    conditionFields: conditionFields.length ? conditionFields : undefined,
+  };
 }
 
 function splitList(value: string): string[] {

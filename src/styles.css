@@ -21,7 +21,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .app {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 300px 1fr;
   min-height: 100%;
 }
 
@@ -73,10 +73,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
   background: #fff;
 }
 .field textarea { min-height: 4.5rem; resize: vertical; }
+.field input.url { font-size: 0.78rem; }
 
-.main { padding: 1.5rem 2rem 3rem; max-width: 1100px; }
+.main { padding: 1.5rem 2rem 3rem; max-width: 1400px; }
 h1 { font-size: 1.7rem; margin: 0 0 0.35rem; }
 .lede { color: var(--muted); margin: 0 0 1.25rem; }
+.section-title { font-size: 1.05rem; margin: 1.25rem 0 0.6rem; }
+.table-wrap { overflow-x: auto; margin-bottom: 0.5rem; }
 
 .row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; margin-bottom: 1rem; }
 .row .field { margin: 0; min-width: 160px; }
@@ -158,6 +161,14 @@ tr.clickable:hover, tr.selected { background: #fff4f4; }
   background: #fff;
 }
 .card h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.card-head h2 { margin: 0; }
 
 .query {
   background: var(--card);
@@ -198,12 +209,14 @@ tr.clickable:hover, tr.selected { background: #fff4f4; }
   background: #fff;
   border: 1px dashed var(--line);
   border-radius: 0.4rem;
-  padding: 0.35rem 0.6rem;
+  padding: 0.5rem 0.7rem;
   margin: 0.35rem 0;
   font-size: 0.85rem;
 }
-.reasoning summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+.reasoning-title { font-weight: 700; color: var(--muted); font-size: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase; }
 .reasoning ol { margin: 0.4rem 0 0.2rem 1.1rem; padding: 0; }
+.reasoning li { margin: 0.2rem 0; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.4rem 0; }
+.bubble .btn { margin: 0.4rem 0; }
 .chat-input { display: flex; gap: 0.5rem; }
 .chat-input input { flex: 1; border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.55rem 0.7rem; }

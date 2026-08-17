@@ -1,5 +1,18 @@
 export type Page = "catalog" | "run" | "results" | "setup" | "agent";
 
+export type EnvName = "dev" | "uat" | "sit" | "prod";
+
+export type EnvEndpoints = {
+  backendUrl: string;
+  agentUrl: string;
+};
+
+export type TriggerFocus = {
+  domainId: string;
+  profileId?: string;
+  runId?: number;
+};
+
 export type Datasource = {
   name: string;
   type: string;
@@ -60,6 +73,10 @@ export type RecRecord = {
 };
 
 export type Connection = {
+  env: EnvName;
+  backendUrl: string;
+  agentUrl: string;
   user: string;
   password: string;
+  endpoints: Record<EnvName, EnvEndpoints>;
 };

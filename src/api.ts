@@ -1,25 +1,89 @@
-import type { Connection, Datasource, Domain, Profile, RecRecord, Run } from "./types";
+import { agentChatUrl, defaultEndpoints, defaultEnv, ENVS, joinUrl } from "./config";
+import type { Connection, Datasource, Domain, EnvName, Profile, RecRecord, Run } from "./types";
 
 const STORAGE_KEY = "data-recon-ui.connection";
 
 export function loadConnection(): Connection {
+  const endpoints = defaultEndpoints();
+  const env = defaultEnv();
+  const fallback: Connection = {
+    env,
+    backendUrl: endpoints[env].backendUrl,
+    agentUrl: endpoints[env].agentUrl,
+    user: "admin",
+    password: "admin",
+    endpoints,
+  };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      return JSON.parse(raw) as Connection;
+    if (!raw) {
+      return fallback;
     }
+    const saved = JSON.parse(raw) as Partial<Connection>;
+    const nextEnv: EnvName = ENVS.includes(saved.env as EnvName) ? (saved.env as EnvName) : env;
+    const merged = {
+      ...endpoints,
+      ...(saved.endpoints ?? {}),
+    };
+    for (const name of ENVS) {
+      merged[name] = {
+        backendUrl: saved.endpoints?.[name]?.backendUrl ?? endpoints[name].backendUrl,
+        agentUrl: saved.endpoints?.[name]?.agentUrl ?? endpoints[name].agentUrl,
+      };
+    }
+    return {
+      env: nextEnv,
+      backendUrl: saved.backendUrl ?? merged[nextEnv].backendUrl,
+      agentUrl: saved.agentUrl ?? merged[nextEnv].agentUrl,
+      user: saved.user || "admin",
+      password: saved.password || "admin",
+      endpoints: merged,
+    };
   } catch {
-    /* ignore */
+    return fallback;
   }
-  return { user: "admin", password: "admin" };
 }
 
 export function saveConnection(connection: Connection) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(connection));
 }
 
+export function selectEnv(connection: Connection, env: EnvName): Connection {
+  const urls = connection.endpoints[env];
+  return {
+    ...connection,
+    env,
+    backendUrl: urls.backendUrl,
+    agentUrl: urls.agentUrl,
+  };
+}
+
+export function updateCurrentUrls(
+  connection: Connection,
+  patch: { backendUrl?: string; agentUrl?: string },
+): Connection {
+  const backendUrl = patch.backendUrl ?? connection.backendUrl;
+  const agentUrl = patch.agentUrl ?? connection.agentUrl;
+  return {
+    ...connection,
+    backendUrl,
+    agentUrl,
+    endpoints: {
+      ...connection.endpoints,
+      [connection.env]: { backendUrl, agentUrl },
+    },
+  };
+}
+
 function authHeader(connection: Connection): string {
   return "Basic " + btoa(`${connection.user}:${connection.password}`);
+}
+
+function resolveUrl(connection: Connection, path: string): string {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  return joinUrl(connection.backendUrl, path);
 }
 
 async function request<T>(
@@ -27,7 +91,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(resolveUrl(connection, path), {
     ...init,
     headers: {
       Authorization: authHeader(connection),
@@ -81,6 +145,8 @@ export const api = {
       `/api/domains/${domainId}/profiles/${profileId}/runs`,
       { method: "POST", body: body ? JSON.stringify(body) : undefined },
     ),
+  runs: (c: Connection, active?: boolean) =>
+    request<Run[]>(c, `/api/runs${active ? "?active=true" : ""}`),
   domainRuns: (c: Connection, domainId: string, active?: boolean) =>
     request<Run[]>(
       c,
@@ -106,4 +172,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  agentChat: (c: Connection, body: unknown) => {
+    const url = agentChatUrl(c.agentUrl);
+    if (!url) {
+      throw new Error("Agent URL is empty for this environment.");
+    }
+    return request<unknown>(c, url, { method: "POST", body: JSON.stringify(body) });
+  },
 };

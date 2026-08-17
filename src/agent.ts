@@ -10,6 +10,7 @@ export type AgentReply = {
   reasoning: string[];
   actions: AgentAction[];
   text: string;
+  focus?: { domainId: string; profileId?: string; runId?: number };
 };
 
 const MODES = ["COUNTS", "MISMATCH_DETAILS", "FIELD_DETAILS"] as const;
@@ -18,14 +19,93 @@ export async function runAgent(
   connection: Connection,
   domains: Domain[],
   utterance: string,
+  onReason?: (steps: string[]) => void,
 ): Promise<AgentReply> {
   const text = utterance.trim();
+  const reasoning: string[] = [];
+  const note = (step: string) => {
+    reasoning.push(step);
+    onReason?.([...reasoning]);
+  };
+
+  note(`Environment: ${connection.env}.`);
+  note(`Backend endpoint: ${connection.backendUrl || "(relative /api)"}.`);
+  if (connection.agentUrl?.trim()) {
+    note(`Agent endpoint: ${connection.agentUrl}.`);
+    return runRemoteAgent(connection, domains, text, reasoning, note);
+  }
+  note("Agent URL is empty, so I am using the local tool agent against the backend.");
+  return runLocalAgent(connection, domains, text, reasoning, note);
+}
+
+async function runRemoteAgent(
+  connection: Connection,
+  domains: Domain[],
+  text: string,
+  reasoning: string[],
+  note: (step: string) => void,
+): Promise<AgentReply> {
+  if (!text) {
+    note("Empty message, so there is nothing to send to the agent.");
+    return {
+      reasoning,
+      actions: [],
+      text: "Type a request such as “run party pg-pg” or “search profiles csv”.",
+    };
+  }
+  note(`POST chat to the agent for env ${connection.env}.`);
+  note("The agent is a separate service from Data Recon; backendUrl is passed so it can call recon APIs.");
+  const payload = await api.agentChat(connection, {
+    message: text,
+    env: connection.env,
+    backendUrl: connection.backendUrl,
+    domains,
+  });
+  const reply = normalizeRemoteReply(payload);
+  (reply.reasoning ?? []).forEach((step) => note(step));
+  note("Remote agent returned a reply.");
+  return {
+    reasoning,
+    actions: reply.actions ?? [],
+    text: reply.text,
+    focus: reply.focus,
+  };
+}
+
+function normalizeRemoteReply(payload: unknown): AgentReply {
+  const body = (payload ?? {}) as Record<string, unknown>;
+  const reasoning = Array.isArray(body.reasoning) ? body.reasoning.map((item) => String(item)) : [];
+  const actions = Array.isArray(body.actions)
+    ? body.actions.map((item) => {
+        const action = item as { name?: string; detail?: string };
+        return { name: String(action.name ?? "action"), detail: String(action.detail ?? "") };
+      })
+    : [];
+  const focusRaw = body.focus as AgentReply["focus"] | undefined;
+  return {
+    reasoning,
+    actions,
+    text: String(body.text ?? body.reply ?? body.message ?? JSON.stringify(payload)),
+    focus: focusRaw,
+  };
+}
+
+async function runLocalAgent(
+  connection: Connection,
+  domains: Domain[],
+  text: string,
+  reasoning: string[],
+  note: (step: string) => void,
+): Promise<AgentReply> {
   const lower = text.toLowerCase();
-  const reasoning: string[] = [`Read the request: “${text}”.`];
+
+  note(`Read the request: “${text}”.`);
+  note(`Catalog in memory: ${domains.length} domain(s), ${domains.reduce((sum, domain) => sum + domain.profiles.length, 0)} profile(s).`);
 
   if (!text) {
+    note("Empty message, so there is nothing to do.");
     return {
-      reasoning: ["Empty message, so there is nothing to do."],
+      reasoning,
       actions: [],
       text: "Type a request such as “run party pg-pg” or “search profiles csv”.",
     };
@@ -34,25 +114,47 @@ export async function runAgent(
   const domain = matchDomain(domains, text);
   const profile = matchProfile(domains, domain, text);
   const mode = MODES.find((item) => lower.includes(item.toLowerCase()) || lower.includes(item.replaceAll("_", " ").toLowerCase()));
+  const conditionFields = parseConditionFields(text);
+
+  note(
+    domain
+      ? `Matched domain “${domain.id}” from the message.`
+      : "No domain name in the catalog matched the message.",
+  );
+  note(
+    profile
+      ? `Matched profile “${profile.domainId}.${profile.profileId}” (${profile.sourceDatasource} → ${profile.targetDatasource}).`
+      : "No profile id in the catalog matched the message.",
+  );
+  note(mode ? `Matched recon mode override “${mode}”.` : "No mode keyword (COUNTS / MISMATCH_DETAILS / FIELD_DETAILS).");
+  note(
+    conditionFields
+      ? `Matched condition fields: ${conditionFields.join(", ")}.`
+      : "No condition-field list in the message.",
+  );
 
   if (isSearch(lower)) {
-    return searchReply(domains, text, reasoning, domain);
+    note("Intent: search the catalog.");
+    return searchReply(domains, text, reasoning, domain, note);
   }
 
   if (isAttach(lower)) {
-    return attachReply(connection, domains, text, reasoning, domain, profile);
+    note("Intent: attach named datasources to a profile.");
+    return attachReply(connection, domains, text, reasoning, domain, profile, note);
   }
 
   if (isTrigger(lower) || looksLikeRunShortcut(text, domain, profile)) {
-    return triggerReply(connection, reasoning, domain, profile, mode);
+    note(isTrigger(lower) ? "Intent: trigger a recon run." : "Intent: short name looks like a run shortcut.");
+    return triggerReply(connection, reasoning, domain, profile, mode, conditionFields, note);
   }
 
   if (isList(lower)) {
-    return searchReply(domains, text, reasoning, domain);
+    note("Intent: list catalog entries.");
+    return searchReply(domains, text, reasoning, domain, note);
   }
 
-  reasoning.push("No trigger/search/attach verb was clear, so I treated this as a catalog search.");
-  return searchReply(domains, text, reasoning, domain);
+  note("No trigger/search/attach verb was clear, so I treated this as a catalog search.");
+  return searchReply(domains, text, reasoning, domain, note);
 }
 
 function isSearch(lower: string): boolean {
@@ -81,23 +183,24 @@ function searchReply(
   text: string,
   reasoning: string[],
   domain: Domain | null,
+  note: (step: string) => void,
 ): AgentReply {
   const query = searchNeedle(text);
-  reasoning.push(
+  note(
     query
       ? `Search needle is “${query}”.`
       : "No extra search needle, so I will list the matched domain or the full catalog.",
   );
   const hits = filterCatalog(domains, query || domain?.id || "");
   if (hits.length === 0) {
-    reasoning.push("No domain or profile name contains that text.");
+    note("No domain or profile name contains that text.");
     return {
       reasoning,
       actions: [{ name: "search", detail: query || text }],
       text: `No domains or profiles matched “${query || text}”.`,
     };
   }
-  reasoning.push(`Matched ${hits.length} domain(s).`);
+  note(`Matched ${hits.length} domain(s) and ${hits.reduce((sum, item) => sum + item.profiles.length, 0)} profile(s).`);
   const lines = hits.flatMap((item) => {
     if (item.profiles.length === 0) {
       return [`- ${item.id} (no profiles)`];
@@ -121,9 +224,10 @@ async function attachReply(
   reasoning: string[],
   domain: Domain | null,
   profile: Profile | null,
+  note: (step: string) => void,
 ): Promise<AgentReply> {
   if (!domain || !profile) {
-    reasoning.push("Attach needs both a domain and a profile. I could not resolve both from the message.");
+    note("Attach needs both a domain and a profile. I could not resolve both from the message.");
     return {
       reasoning,
       actions: [],
@@ -132,18 +236,18 @@ async function attachReply(
   }
   const names = datasourceNames(text, domain, profile);
   if (!names.source && !names.target) {
-    reasoning.push("No datasource names besides the domain/profile tokens were found.");
+    note("No datasource names besides the domain/profile tokens were found.");
     return {
       reasoning,
       actions: [],
       text: "Say which named datasources to attach, for example: attach source landing and target mongo on party pg-mongo.",
     };
   }
-  reasoning.push(`Resolved profile ${domain.id}.${profile.profileId}.`);
-  reasoning.push(
-    `Will attach source=${names.source ?? "(unchanged)"} target=${names.target ?? "(unchanged)"}.`,
-  );
+  note(`Resolved profile ${domain.id}.${profile.profileId}.`);
+  note(`Will attach source=${names.source ?? "(unchanged)"} target=${names.target ?? "(unchanged)"}.`);
+  note(`Calling PUT /api/domains/${domain.id}/profiles/${profile.profileId}/datasources`);
   const updated = await api.attachDatasources(connection, domain.id, profile.profileId, names);
+  note("Attach succeeded.");
   return {
     reasoning,
     actions: [
@@ -162,44 +266,58 @@ async function triggerReply(
   domain: Domain | null,
   profile: Profile | null,
   mode: string | undefined,
+  conditionFields: string[] | undefined,
+  note: (step: string) => void,
 ): Promise<AgentReply> {
   if (!domain) {
-    reasoning.push("A trigger needs a domain that exists in the catalog.");
+    note("A trigger needs a domain that exists in the catalog.");
     return {
       reasoning,
       actions: [],
       text: "I could not match a domain. Try “run party” or “run party pg-pg”.",
     };
   }
-  const body = mode ? { mode } : undefined;
+  const body =
+    mode || conditionFields
+      ? { mode, conditionFields }
+      : undefined;
   if (mode) {
-    reasoning.push(`Mode override: ${mode}.`);
+    note(`Mode override: ${mode}. Request body will include it.`);
   } else {
-    reasoning.push("No mode override; Data Recon will use the profile/domain recon policy.");
+    note("No mode override; Data Recon will use the profile/domain recon policy.");
+  }
+  if (conditionFields) {
+    note(`Condition fields override: ${conditionFields.join(", ")}.`);
   }
   if (profile) {
-    reasoning.push(`Triggering one profile: ${domain.id}.${profile.profileId}.`);
+    note(`Scope: one profile (${domain.id}.${profile.profileId}), not the whole domain.`);
+    note(`Calling POST /api/domains/${domain.id}/profiles/${profile.profileId}/runs`);
     const result = await api.runProfile(connection, domain.id, profile.profileId, body);
+    note(`API accepted profile run id ${result.runId}.`);
     return {
       reasoning,
       actions: [
         {
-          name: "POST run",
-          detail: `/api/domains/${domain.id}/profiles/${profile.profileId}/runs`,
+          name: "POST run profile",
+          detail: `/api/domains/${domain.id}/profiles/${profile.profileId}/runs → ${result.runId}`,
         },
       ],
       text: `Triggered ${domain.id}.${profile.profileId}. Run id ${result.runId} was accepted.`,
+      focus: { domainId: domain.id, profileId: profile.profileId, runId: result.runId },
     };
   }
-  reasoning.push(`No profile token matched, so I will trigger every profile in domain ${domain.id}.`);
+  note(`Scope: whole domain ${domain.id} (${domain.profiles.length} profile(s)).`);
+  note(`Calling POST /api/domains/${domain.id}/runs`);
   const result = await api.runDomain(connection, domain.id, body);
   const ids = Object.entries(result.runIds)
     .map(([name, id]) => `${name}=${id}`)
     .join(", ");
+  note(`API accepted domain run ${result.domainRunId}. Profile runs: ${ids || "none"}.`);
   return {
     reasoning,
-    actions: [{ name: "POST run", detail: `/api/domains/${domain.id}/runs` }],
+    actions: [{ name: "POST run domain", detail: `/api/domains/${domain.id}/runs → ${result.domainRunId}` }],
     text: `Triggered domain ${domain.id} (domain run ${result.domainRunId}). Profile runs: ${ids || "none"}.`,
+    focus: { domainId: domain.id, runId: result.domainRunId },
   };
 }
 
@@ -273,6 +391,18 @@ function datasourceNames(
     source: tokens[0],
     target: tokens[1] ?? tokens[0],
   };
+}
+
+function parseConditionFields(text: string): string[] | undefined {
+  const match = text.match(/condition(?:\s+fields?)?[:\s]+([a-zA-Z0-9_,\s]+)/i);
+  if (!match) {
+    return undefined;
+  }
+  const fields = match[1]
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && !MODES.includes(item.toUpperCase() as (typeof MODES)[number]));
+  return fields.length ? fields : undefined;
 }
 
 function searchNeedle(text: string): string {

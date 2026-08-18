@@ -1,5 +1,14 @@
 import { agentChatUrl, defaultEndpoints, defaultEnv, ENVS, joinUrl } from "./config";
-import type { Connection, Datasource, Domain, EnvName, Profile, RecRecord, Run } from "./types";
+import type {
+  Connection,
+  Datasource,
+  Domain,
+  EnvName,
+  Profile,
+  RecRecord,
+  ReconRunBody,
+  Run,
+} from "./types";
 
 const STORAGE_KEY = "data-recon-ui.connection";
 
@@ -133,13 +142,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  runDomain: (c: Connection, domainId: string, body?: unknown) =>
+  runDomain: (c: Connection, domainId: string, body?: ReconRunBody) =>
     request<{ domainId: string; domainRunId: number; runIds: Record<string, number> }>(
       c,
       `/api/domains/${domainId}/runs`,
       { method: "POST", body: body ? JSON.stringify(body) : undefined },
     ),
-  runProfile: (c: Connection, domainId: string, profileId: string, body?: unknown) =>
+  runProfile: (c: Connection, domainId: string, profileId: string, body?: ReconRunBody) =>
     request<{ domainId: string; profileId: string; runId: number }>(
       c,
       `/api/domains/${domainId}/profiles/${profileId}/runs`,
@@ -157,6 +166,11 @@ export const api = {
       c,
       `/api/domains/${domainId}/profiles/${profileId}/runs${active ? "?active=true" : ""}`,
     ),
+  /** Latest active profile runs — operator status / metrics (MCP will mirror this). */
+  activeProfileStatus: async (c: Connection) => {
+    const runs = await request<Run[]>(c, "/api/runs?active=true");
+    return runs.filter((run) => run.profileId);
+  },
   records: (c: Connection, runId: number, status?: string) =>
     request<RecRecord[]>(
       c,

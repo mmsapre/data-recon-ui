@@ -1,4 +1,4 @@
-export type Page = "catalog" | "run" | "results" | "setup" | "agent";
+export type Page = "catalog" | "run" | "results" | "setup" | "agentic";
 
 export type EnvName = "dev" | "uat" | "sit" | "prod";
 
@@ -16,6 +16,7 @@ export type TriggerFocus = {
 export type Datasource = {
   name: string;
   type: string;
+  tags?: string[];
 };
 
 export type Profile = {
@@ -32,14 +33,19 @@ export type Profile = {
   schedule: string | null;
   reconMode: string;
   conditionFields: string[];
+  tags?: string[];
 };
 
 export type Domain = {
   id: string;
   schedule: string | null;
   hashingStrategy: string | null;
+  tags?: string[];
   profiles: Profile[];
 };
+
+/** FULL = complete compare; INCREMENTAL = only keys changed since baselineRunId. */
+export type RunScope = "FULL" | "INCREMENTAL" | string;
 
 export type Run = {
   id: number;
@@ -62,6 +68,8 @@ export type Run = {
   sourceQuery: string | null;
   targetQuery: string | null;
   conditionFields: string[] | null;
+  runScope: RunScope | null;
+  baselineRunId: number | null;
 };
 
 export type RecRecord = {
@@ -70,6 +78,15 @@ export type RecRecord = {
   targetHash: string | null;
   status: string;
   fieldDiffs: string | null;
+  sourcePayload?: string | null;
+  targetPayload?: string | null;
+};
+
+export type ReconRunBody = {
+  mode?: string;
+  conditionFields?: string[];
+  /** When true, force FULL even if an active prior run exists. Default is incremental. */
+  forceFull?: boolean;
 };
 
 export type Connection = {

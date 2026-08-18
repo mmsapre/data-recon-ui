@@ -1,5 +1,10 @@
-import { api } from "./api";
-import type { Connection, Domain, Profile } from "./types";
+/**
+ * Agentic chat helpers — kept separate from the operator console.
+ * A future MCP server will expose profile status, metrics, and match enquiry;
+ * this module must not become that surface.
+ */
+import { api } from "../api";
+import type { Connection, Domain, Profile, ReconRunBody } from "../types";
 
 export type AgentAction = {
   name: string;
@@ -35,6 +40,7 @@ export async function runAgent(
     return runRemoteAgent(connection, domains, text, reasoning, note);
   }
   note("Agent URL is empty, so I am using the local tool agent against the backend.");
+  note("Status / metrics / match enquiry will move to an MCP server; this chat only triggers and searches.");
   return runLocalAgent(connection, domains, text, reasoning, note);
 }
 
@@ -100,7 +106,9 @@ async function runLocalAgent(
   const lower = text.toLowerCase();
 
   note(`Read the request: “${text}”.`);
-  note(`Catalog in memory: ${domains.length} domain(s), ${domains.reduce((sum, domain) => sum + domain.profiles.length, 0)} profile(s).`);
+  note(
+    `Catalog in memory: ${domains.length} domain(s), ${domains.reduce((sum, domain) => sum + domain.profiles.length, 0)} profile(s).`,
+  );
 
   if (!text) {
     note("Empty message, so there is nothing to do.");
@@ -113,8 +121,13 @@ async function runLocalAgent(
 
   const domain = matchDomain(domains, text);
   const profile = matchProfile(domains, domain, text);
-  const mode = MODES.find((item) => lower.includes(item.toLowerCase()) || lower.includes(item.replaceAll("_", " ").toLowerCase()));
+  const mode = MODES.find(
+    (item) =>
+      lower.includes(item.toLowerCase()) ||
+      lower.includes(item.replaceAll("_", " ").toLowerCase()),
+  );
   const conditionFields = parseConditionFields(text);
+  const forceFull = /\b(force\s*full|full\s*run|forcefull)\b/i.test(text);
 
   note(
     domain
@@ -132,6 +145,7 @@ async function runLocalAgent(
       ? `Matched condition fields: ${conditionFields.join(", ")}.`
       : "No condition-field list in the message.",
   );
+  note(forceFull ? "forceFull=true (FULL run)." : "Default incremental unless no prior active run.");
 
   if (isSearch(lower)) {
     note("Intent: search the catalog.");
@@ -145,7 +159,7 @@ async function runLocalAgent(
 
   if (isTrigger(lower) || looksLikeRunShortcut(text, domain, profile)) {
     note(isTrigger(lower) ? "Intent: trigger a recon run." : "Intent: short name looks like a run shortcut.");
-    return triggerReply(connection, reasoning, domain, profile, mode, conditionFields, note);
+    return triggerReply(connection, reasoning, domain, profile, mode, conditionFields, forceFull, note);
   }
 
   if (isList(lower)) {
@@ -200,7 +214,9 @@ function searchReply(
       text: `No domains or profiles matched “${query || text}”.`,
     };
   }
-  note(`Matched ${hits.length} domain(s) and ${hits.reduce((sum, item) => sum + item.profiles.length, 0)} profile(s).`);
+  note(
+    `Matched ${hits.length} domain(s) and ${hits.reduce((sum, item) => sum + item.profiles.length, 0)} profile(s).`,
+  );
   const lines = hits.flatMap((item) => {
     if (item.profiles.length === 0) {
       return [`- ${item.id} (no profiles)`];
@@ -267,6 +283,7 @@ async function triggerReply(
   profile: Profile | null,
   mode: string | undefined,
   conditionFields: string[] | undefined,
+  forceFull: boolean,
   note: (step: string) => void,
 ): Promise<AgentReply> {
   if (!domain) {
@@ -277,9 +294,13 @@ async function triggerReply(
       text: "I could not match a domain. Try “run party” or “run party pg-pg”.",
     };
   }
-  const body =
-    mode || conditionFields
-      ? { mode, conditionFields }
+  const body: ReconRunBody | undefined =
+    mode || conditionFields || forceFull
+      ? {
+          mode,
+          conditionFields,
+          forceFull: forceFull || undefined,
+        }
       : undefined;
   if (mode) {
     note(`Mode override: ${mode}. Request body will include it.`);
@@ -288,6 +309,9 @@ async function triggerReply(
   }
   if (conditionFields) {
     note(`Condition fields override: ${conditionFields.join(", ")}.`);
+  }
+  if (forceFull) {
+    note("forceFull=true — FULL scope.");
   }
   if (profile) {
     note(`Scope: one profile (${domain.id}.${profile.profileId}), not the whole domain.`);
@@ -328,9 +352,17 @@ export function filterCatalog(domains: Domain[], query: string): Domain[] {
   }
   return domains
     .map((domain) => {
-      const domainHit = domain.id.toLowerCase().includes(needle);
+      const domainHit =
+        domain.id.toLowerCase().includes(needle) ||
+        (domain.tags ?? []).some((tag) => tag.toLowerCase().includes(needle));
       const profiles = domain.profiles.filter((profile) =>
-        [profile.profileId, profile.sourceDatasource, profile.targetDatasource, profile.reconMode]
+        [
+          profile.profileId,
+          profile.sourceDatasource,
+          profile.targetDatasource,
+          profile.reconMode,
+          ...(profile.tags ?? []),
+        ]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(needle)),
       );
@@ -376,9 +408,13 @@ function datasourceNames(
   profile: Profile,
 ): { source?: string; target?: string } {
   const skip = new Set(
-    tokenize(`${domain.id} ${profile.profileId} attach bind set add datasource datasources source target to on and`),
+    tokenize(
+      `${domain.id} ${profile.profileId} attach bind set add datasource datasources source target to on and`,
+    ),
   );
-  const tokens = tokenize(text).filter((token) => !skip.has(token) && !MODES.map((mode) => mode.toLowerCase()).includes(token));
+  const tokens = tokenize(text).filter(
+    (token) => !skip.has(token) && !MODES.map((mode) => mode.toLowerCase()).includes(token),
+  );
   const sourceMatch = text.match(/source\s+(\S+)/i);
   const targetMatch = text.match(/target\s+(\S+)/i);
   if (sourceMatch || targetMatch) {

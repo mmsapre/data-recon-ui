@@ -50,6 +50,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
   margin-bottom: 1.5rem;
 }
 
+.nav-group {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0.65rem 0 0.15rem 0.35rem;
+}
+
 .nav button {
   text-align: left;
   border: 0;
@@ -121,6 +130,20 @@ h1 { font-size: 1.7rem; margin: 0 0 0.35rem; }
   border-radius: 999px;
   padding: 0.2rem 0.65rem;
   font-size: 0.85rem;
+}
+
+.scope {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.scope.full { color: var(--text); }
+.scope.incremental { color: #3366cc; }
+
+td.payload {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 table {

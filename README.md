@@ -1,11 +1,18 @@
 # Data Recon UI
 
-Simple Streamlit-style React console for [Data Recon](https://github.com/mmsapre/DataRecon).
-It talks to the Data Recon HTTP API using basic auth. Backend and agent URLs are **separate** and chosen per environment (`dev`, `uat`, `sit`, `prod`).
+Operator console for [Data Recon](https://github.com/mmsapre/DataRecon), plus a **separate** agentic chat surface.
+
+| Surface | Purpose |
+|---|---|
+| **Operator** (Search & run, Run recon, Audit & status, Setup) | Humans: trigger runs, view profile status, metrics, match / mismatch counts |
+| **Agentic** (`src/agentic/`) | Chat to search / attach / trigger only — **not** status enquiry |
+| **MCP (planned)** | Agents: profile status, enquire metrics, match status — keep out of operator UI |
+
+Backend and agent URLs are separate and chosen per environment (`dev`, `uat`, `sit`, `prod`).
 
 ## Run
 
-Start Data Recon first (`mvn mn:run` in `data-recon`). Then:
+Start Data Recon first (`mvn spring-boot:run` in `data-recon`). Then:
 
 ```bash
 npm install
@@ -21,76 +28,58 @@ Pick **Environment** in the sidebar, then set:
 | Field | Used for |
 |---|---|
 | Backend URL | Data Recon API (`/api/domains`, `/api/runs`, …) |
-| Agent URL | Optional separate chat/agent service. Empty = built-in local agent, still calling the backend URL |
+| Agent URL | Optional separate chat/agent service. Empty = built-in local agent in `src/agentic/` |
 
-URLs are stored per env in the browser. Defaults come from Vite env files (copy [`.env.example`](.env.example) to `.env.local`):
-
-```bash
-VITE_DEFAULT_ENV=dev
-VITE_DEV_BACKEND_URL=http://localhost:8080
-VITE_DEV_AGENT_URL=
-VITE_UAT_BACKEND_URL=https://data-recon.uat.example
-VITE_UAT_AGENT_URL=https://recon-agent.uat.example
-VITE_SIT_BACKEND_URL=
-VITE_SIT_AGENT_URL=
-VITE_PROD_BACKEND_URL=
-VITE_PROD_AGENT_URL=
-```
+URLs are stored per env in the browser. Defaults come from Vite env files (copy [`.env.example`](.env.example) to `.env.local`).
 
 Do not put backend and agent on the same field. Leave Agent URL blank in `dev` unless you have a remote agent.
 
-Remote agent contract: `POST {agentUrl}/chat` (or the URL as given if it already ends in `/chat`, `/agent`, `/messages`, or `/invoke`):
+The Data Recon service allows the UI origin (`DATA_RECON_CORS_ORIGIN`, default `http://localhost:5173`).
 
-```json
-{
-  "message": "run party pg-pg",
-  "env": "dev",
-  "backendUrl": "http://localhost:8080",
-  "domains": []
-}
-```
-
-Expected JSON: `{ "text": "...", "reasoning": ["..."], "actions": [{ "name": "...", "detail": "..." }], "focus": { "domainId": "party", "runId": 1 } }`.
-
-The Data Recon service allows the UI origin (`DATA_RECON_CORS_ORIGIN`, default `http://localhost:5173`) so the browser can call a backend URL that is not same-origin.
-
-## Pages
+## Operator pages
 
 | Page | What it does |
 |---|---|
-| Search & run | Search domains/profiles, attach named datasources, then **Run domain** or **Run profile** |
-| Run recon | Same trigger with domain/profile pickers, optional mode / condition fields |
-| Audit | All domain and profile runs, counts, stored queries, and per-key hashes |
-| Setup | Add an in-memory domain or profile (datasource names must already exist in YAML) |
-| Agent chat | Chat to search, attach, or trigger; **all reasoning is always visible** |
+| Search & run | Search domains/profiles (incl. tags), attach datasources, trigger with **Incremental** (default) or **Force full** |
+| Run recon | Same trigger with pickers |
+| Audit & status | **Active profile status** (metrics + match counts), run history with `runScope` / `baselineRunId`, per-key hashes and payloads |
+| Setup | Add in-memory domain or profile |
 
-API-added domains/profiles are not persisted across a Data Recon restart.
-Connection pools stay in YAML; **Add datasource** attaches those names to a profile.
+### Incremental vs force full
 
-## Search then trigger
+POST run bodies accept `forceFull: true`. Without it, Data Recon uses an **INCREMENTAL** scope when an active prior run exists; otherwise **FULL**. Audit shows `runScope` and `baselineRunId`.
 
-1. Connect (`admin` / `admin` by default).
-2. On **Search & run**, type a domain or profile name (`party`, `pg-csv`, `mongo`).
-3. Optionally set **Mode** and **Condition fields**.
-4. Click **Run domain** on a domain card, or **Run profile** on a row.
-5. The console opens **Audit** on the accepted run. While a run is `RUNNING`, the table refreshes every few seconds.
+### Status & metrics (operator / future MCP)
 
-## Audit
+`GET /api/runs?active=true` drives the **Active profile status** panel:
 
-**Audit** loads `GET /api/runs` (every domain and profile, not only the latest). Click a row to see counts and stored hashes. Domain runs list their profile children; pick a profile row for per-key results. Business values are never shown.
+- profile run status (`COMPLETED` / `RUNNING` / `FAILED`)
+- matched / mismatched / source-only / target-only counts
+- scope and baseline
 
-Filter by domain, profile, kind (domain vs profile), run status, or latest-only.
+A future MCP server should wrap the same enquiry (profile status, metrics, match status) for agents — do not fold that into the operator pages or into agentic chat.
 
-## Agent examples
+## Agentic (separate)
 
-Each reply lists every reasoning step (catalog size, matched domain/profile, intent, HTTP path, accepted run ids). After a trigger, use **View run in Audit** to inspect counts and hashes.
+Nav group **Agentic · MCP later** → `src/agentic/`.
+
+Chat can search, attach, or trigger (including “force full”). It does **not** answer profile status / metrics / match questions; use Audit or MCP for that.
 
 ```text
 search csv
 list party
 attach landing and mongo to party pg-mongo
 run party pg-pg
-run party
+run party force full
 trigger party pg-csv COUNTS
-run party pg-pg condition fields party_name, status
 ```
+
+Remote agent contract: `POST {agentUrl}/chat` with `{ message, env, backendUrl, domains }` → `{ text, reasoning, actions, focus }`.
+
+## Search then trigger
+
+1. Connect (`admin` / `admin` by default).
+2. On **Search & run**, type a domain or profile name (or tag).
+3. Optionally set Mode, Condition fields, and Run scope (Incremental / Force full).
+4. Click **Run domain** or **Run profile**.
+5. **Audit & status** opens on the accepted run and refreshes while `RUNNING`.

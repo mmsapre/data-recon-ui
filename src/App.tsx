@@ -1,16 +1,29 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, loadConnection, saveConnection, selectEnv, updateCurrentUrls } from "./api";
-import { runAgent, filterCatalog } from "./agent";
+import { AgentPage, filterCatalog } from "./agentic";
 import { ENVS } from "./config";
-import type { AgentAction } from "./agent";
-import type { Connection, Datasource, Domain, EnvName, Page, RecRecord, Run, TriggerFocus } from "./types";
+import type {
+  Connection,
+  Datasource,
+  Domain,
+  EnvName,
+  Page,
+  RecRecord,
+  ReconRunBody,
+  Run,
+  TriggerFocus,
+} from "./types";
 
-const PAGES: { id: Page; label: string }[] = [
+/** Operator console pages. Agentic is separate (MCP will own status/metrics for agents). */
+const OPERATOR_PAGES: { id: Page; label: string }[] = [
   { id: "catalog", label: "Search & run" },
   { id: "run", label: "Run recon" },
-  { id: "results", label: "Audit" },
+  { id: "results", label: "Audit & status" },
   { id: "setup", label: "Setup" },
-  { id: "agent", label: "Agent chat" },
+];
+
+const AGENTIC_PAGES: { id: Page; label: string }[] = [
+  { id: "agentic", label: "Agentic (separate)" },
 ];
 
 export default function App() {
@@ -82,9 +95,20 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <h1 className="brand">Data Recon</h1>
-        <p className="tagline">Streamlit-style console</p>
+        <p className="tagline">Operator console</p>
         <nav className="nav">
-          {PAGES.map((item) => (
+          <div className="nav-group">Operator</div>
+          {OPERATOR_PAGES.map((item) => (
+            <button
+              key={item.id}
+              className={page === item.id ? "active" : ""}
+              onClick={() => setPage(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+          <div className="nav-group">Agentic · MCP later</div>
+          {AGENTIC_PAGES.map((item) => (
             <button
               key={item.id}
               className={page === item.id ? "active" : ""}
@@ -206,7 +230,7 @@ export default function App() {
             onRefresh={() => void refresh()}
           />
         ) : null}
-        {page === "agent" ? (
+        {page === "agentic" ? (
           <AgentPage
             connection={connection}
             domains={domains}
@@ -246,6 +270,7 @@ function CatalogPage({
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("");
   const [fields, setFields] = useState("");
+  const [forceFull, setForceFull] = useState(false);
   const [attachDomain, setAttachDomain] = useState("");
   const [attachProfile, setAttachProfile] = useState("");
   const [sourceDs, setSourceDs] = useState("");
@@ -299,7 +324,7 @@ function CatalogPage({
     onBusy(true);
     onError(null);
     try {
-      const result = await api.runDomain(connection, id, runBody(mode, fields));
+      const result = await api.runDomain(connection, id, runBody(mode, fields, forceFull));
       onNotice(`Triggered domain ${id} (domain run ${result.domainRunId}).`);
       onTriggered({ domainId: id, runId: result.domainRunId });
     } catch (err) {
@@ -313,7 +338,7 @@ function CatalogPage({
     onBusy(true);
     onError(null);
     try {
-      const result = await api.runProfile(connection, nextDomain, nextProfile, runBody(mode, fields));
+      const result = await api.runProfile(connection, nextDomain, nextProfile, runBody(mode, fields, forceFull));
       onNotice(`Triggered ${nextDomain}.${nextProfile} (run ${result.runId}).`);
       onTriggered({ domainId: nextDomain, profileId: nextProfile, runId: result.runId });
     } catch (err) {
@@ -334,12 +359,15 @@ function CatalogPage({
   return (
     <>
       <h1>Search & run</h1>
-      <p className="lede">Search domains and profiles, then trigger the whole domain or one profile. Audit opens on the new run.</p>
+      <p className="lede">
+        Search domains and profiles, then trigger. Default is incremental when a prior active run
+        exists; check Force full for a FULL compare. Audit opens on the new run.
+      </p>
       <div className="row">
         <div className="field" style={{ minWidth: 280, flex: 1 }}>
           <label>Search domains and profiles</label>
           <input
-            placeholder="party, pg-csv, mongo…"
+            placeholder="party, pg-csv, mongo, tag…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -361,11 +389,22 @@ function CatalogPage({
             onChange={(event) => setFields(event.target.value)}
           />
         </div>
+        <div className="field">
+          <label>Run scope</label>
+          <select
+            value={forceFull ? "full" : "incremental"}
+            onChange={(event) => setForceFull(event.target.value === "full")}
+          >
+            <option value="incremental">Incremental (default)</option>
+            <option value="full">Force full</option>
+          </select>
+        </div>
       </div>
       <div className="chips">
         {datasources.map((item) => (
           <span key={item.name} className="chip">
             {item.name} · {item.type}
+            {(item.tags ?? []).length ? ` · ${(item.tags ?? []).join(",")}` : ""}
           </span>
         ))}
         {datasources.length === 0 ? <span className="empty">No datasources.</span> : null}
@@ -398,6 +437,7 @@ function CatalogPage({
             <h2>
               {item.id}
               {item.schedule ? ` · ${item.schedule}` : ""}
+              {(item.tags ?? []).length ? ` · tags: ${(item.tags ?? []).join(", ")}` : ""}
             </h2>
             <button
               type="button"
@@ -483,6 +523,7 @@ function RunPage({
   const [scope, setScope] = useState<"domain" | "profile">("profile");
   const [mode, setMode] = useState("");
   const [fields, setFields] = useState("");
+  const [forceFull, setForceFull] = useState(false);
   const [search, setSearch] = useState("");
   const visible = filterCatalog(domains, search);
 
@@ -493,7 +534,7 @@ function RunPage({
     }
     onBusy(true);
     onError(null);
-    const body = runBody(mode, fields);
+    const body = runBody(mode, fields, forceFull);
     try {
       if (scope === "domain") {
         const result = await api.runDomain(connection, domainId, body);
@@ -517,7 +558,10 @@ function RunPage({
   return (
     <>
       <h1>Run recon</h1>
-      <p className="lede">Trigger a domain (all profiles) or a single source/target pairing. Audit opens on the accepted run.</p>
+      <p className="lede">
+        Trigger a domain or profile. Incremental is the default; Force full compares everything.
+        Open Audit & status for metrics and match counts.
+      </p>
       <div className="row">
         <div className="field" style={{ minWidth: 200, flex: 1 }}>
           <label>Search</label>
@@ -562,6 +606,16 @@ function RunPage({
             onChange={(event) => setFields(event.target.value)}
           />
         </div>
+        <div className="field">
+          <label>Run scope</label>
+          <select
+            value={forceFull ? "full" : "incremental"}
+            onChange={(event) => setForceFull(event.target.value === "full")}
+          >
+            <option value="incremental">Incremental (default)</option>
+            <option value="full">Force full</option>
+          </select>
+        </div>
         <button className="btn" disabled={busy} onClick={() => void trigger()}>
           Run
         </button>
@@ -591,6 +645,7 @@ function ResultsPage({
   const [kind, setKind] = useState<"all" | "domain" | "profile">("all");
   const [activeOnly, setActiveOnly] = useState(false);
   const [runStatus, setRunStatus] = useState("");
+  const [runScopeFilter, setRunScopeFilter] = useState("");
   const [runs, setRuns] = useState<Run[]>([]);
   const [selected, setSelected] = useState<Run | null>(null);
   const [recordStatus, setRecordStatus] = useState("");
@@ -646,14 +701,26 @@ function ResultsPage({
       if (runStatus && run.status !== runStatus) {
         return false;
       }
+      if (runScopeFilter && (run.runScope ?? "") !== runScopeFilter) {
+        return false;
+      }
       if (!needle) {
         return true;
       }
-      return [String(run.id), run.domainId, run.profileId, run.status, run.reconMode, String(run.domainRunId ?? "")]
+      return [
+        String(run.id),
+        run.domainId,
+        run.profileId,
+        run.status,
+        run.reconMode,
+        run.runScope,
+        String(run.domainRunId ?? ""),
+        String(run.baselineRunId ?? ""),
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(needle));
     });
-  }, [runs, filterDomain, filterProfile, kind, activeOnly, runStatus, query]);
+  }, [runs, filterDomain, filterProfile, kind, activeOnly, runStatus, runScopeFilter, query]);
 
   useEffect(() => {
     if (focusRunId) {
@@ -695,6 +762,10 @@ function ResultsPage({
   }, [runs]);
 
   const profileTotals = filtered.filter((run) => run.profileId);
+  const activeProfiles = useMemo(
+    () => runs.filter((run) => run.active && run.profileId),
+    [runs],
+  );
   const childRuns = selected && !selected.profileId
     ? runs.filter((run) => run.domainRunId === selected.id && run.profileId)
     : [];
@@ -709,23 +780,94 @@ function ResultsPage({
   if (!connected) {
     return (
       <>
-        <h1>Audit</h1>
-        <p className="lede">Connect in the sidebar to load every recon run and its stored results.</p>
+        <h1>Audit & status</h1>
+        <p className="lede">Connect in the sidebar to load profile status, metrics, and match counts.</p>
       </>
     );
   }
 
   return (
     <>
-      <h1>Audit</h1>
+      <h1>Audit & status</h1>
       <p className="lede">
-        Every domain and profile run, with counts and per-key hashes. Trigger from Search & run, then inspect here.
+        Operator view of profile status, run metrics, and match / mismatch counts. Agentic chat does
+        not own this; a future MCP server will expose the same enquiry for agents.
       </p>
+      <h2 className="section-title">Active profile status</h2>
+      <div className="metrics">
+        <Metric label="Active profiles" value={activeProfiles.length} />
+        <Metric
+          label="Matched"
+          value={activeProfiles.reduce((sum, run) => sum + (run.matchedCount ?? 0), 0)}
+          tone="ok"
+        />
+        <Metric
+          label="Mismatched"
+          value={activeProfiles.reduce((sum, run) => sum + (run.mismatchedCount ?? 0), 0)}
+          tone="bad"
+        />
+        <Metric
+          label="Source only"
+          value={activeProfiles.reduce((sum, run) => sum + (run.sourceOnlyCount ?? 0), 0)}
+        />
+        <Metric
+          label="Target only"
+          value={activeProfiles.reduce((sum, run) => sum + (run.targetOnlyCount ?? 0), 0)}
+        />
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Domain</th>
+              <th>Profile</th>
+              <th>Run</th>
+              <th>Status</th>
+              <th>Scope</th>
+              <th>Baseline</th>
+              <th>Mode</th>
+              <th>Match</th>
+              <th>Mismatch</th>
+              <th>Src only</th>
+              <th>Tgt only</th>
+              <th>Completed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {activeProfiles.map((run) => (
+              <tr
+                key={run.id}
+                className={`clickable${selected?.id === run.id ? " selected" : ""}`}
+                onClick={() => pickRun(run)}
+              >
+                <td>{run.domainId}</td>
+                <td>{run.profileId}</td>
+                <td>{run.id}</td>
+                <td className={`status ${run.status}`}>{run.status}</td>
+                <td>
+                  <span className={`scope ${(run.runScope ?? "").toLowerCase()}`}>
+                    {run.runScope ?? "—"}
+                  </span>
+                </td>
+                <td>{run.baselineRunId ?? "—"}</td>
+                <td>{run.reconMode}</td>
+                <td>{run.matchedCount}</td>
+                <td className={run.mismatchedCount ? "status MISMATCHED" : ""}>{run.mismatchedCount}</td>
+                <td>{run.sourceOnlyCount}</td>
+                <td>{run.targetOnlyCount}</td>
+                <td>{formatTime(run.completedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {activeProfiles.length === 0 ? <p className="empty">No active profile runs yet.</p> : null}
+      <h2 className="section-title">Run history</h2>
       <div className="row">
         <div className="field" style={{ minWidth: 180, flex: 1 }}>
           <label>Search runs</label>
           <input
-            placeholder="run id, domain, profile, status…"
+            placeholder="run id, domain, profile, status, scope…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -784,6 +926,14 @@ function ResultsPage({
           </select>
         </div>
         <div className="field">
+          <label>Scope</label>
+          <select value={runScopeFilter} onChange={(event) => setRunScopeFilter(event.target.value)}>
+            <option value="">All</option>
+            <option value="FULL">FULL</option>
+            <option value="INCREMENTAL">INCREMENTAL</option>
+          </select>
+        </div>
+        <div className="field">
           <label>Latest only</label>
           <select value={activeOnly ? "yes" : "no"} onChange={(event) => setActiveOnly(event.target.value === "yes")}>
             <option value="no">All history</option>
@@ -819,6 +969,8 @@ function ResultsPage({
               <th>Profile</th>
               <th>Domain run</th>
               <th>Status</th>
+              <th>Scope</th>
+              <th>Baseline</th>
               <th>Mode</th>
               <th>Active</th>
               <th>Src</th>
@@ -844,6 +996,12 @@ function ResultsPage({
                 <td>{run.profileId ?? "—"}</td>
                 <td>{run.domainRunId ?? (run.profileId ? "—" : run.id)}</td>
                 <td className={`status ${run.status}`}>{run.status}</td>
+                <td>
+                  <span className={`scope ${(run.runScope ?? "").toLowerCase()}`}>
+                    {run.runScope ?? "—"}
+                  </span>
+                </td>
+                <td>{run.baselineRunId ?? "—"}</td>
                 <td>{run.reconMode}</td>
                 <td>{run.active ? "yes" : ""}</td>
                 <td>{run.sourceCount}</td>
@@ -876,6 +1034,14 @@ function ResultsPage({
             <Metric label="Source only" value={selected.sourceOnlyCount} />
             <Metric label="Target only" value={selected.targetOnlyCount} />
           </div>
+          <div className="chips">
+            <span className="chip">Scope: {selected.runScope ?? "—"}</span>
+            <span className="chip">Baseline: {selected.baselineRunId ?? "—"}</span>
+            <span className="chip">Mode: {selected.reconMode ?? "—"}</span>
+            {(selected.conditionFields ?? []).length ? (
+              <span className="chip">Fields: {(selected.conditionFields ?? []).join(", ")}</span>
+            ) : null}
+          </div>
           {selected.sourceQuery || selected.targetQuery ? (
             <div className="row">
               {selected.sourceQuery ? (
@@ -902,6 +1068,7 @@ function ResultsPage({
                       <th>Run</th>
                       <th>Profile</th>
                       <th>Status</th>
+                      <th>Scope</th>
                       <th>Match</th>
                       <th>Mismatch</th>
                       <th>Src only</th>
@@ -918,6 +1085,7 @@ function ResultsPage({
                         <td>{run.id}</td>
                         <td>{run.profileId}</td>
                         <td className={`status ${run.status}`}>{run.status}</td>
+                        <td>{run.runScope ?? "—"}</td>
                         <td>{run.matchedCount}</td>
                         <td className={run.mismatchedCount ? "status MISMATCHED" : ""}>{run.mismatchedCount}</td>
                         <td>{run.sourceOnlyCount}</td>
@@ -952,6 +1120,8 @@ function ResultsPage({
                       <th>Source hash</th>
                       <th>Target hash</th>
                       <th>Field diffs</th>
+                      <th>Source payload</th>
+                      <th>Target payload</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -962,6 +1132,8 @@ function ResultsPage({
                         <td className="mono">{record.sourceHash}</td>
                         <td className="mono">{record.targetHash}</td>
                         <td className="mono">{record.fieldDiffs}</td>
+                        <td className="mono payload">{record.sourcePayload ?? ""}</td>
+                        <td className="mono payload">{record.targetPayload ?? ""}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -972,7 +1144,7 @@ function ResultsPage({
               ) : null}
             </>
           ) : (
-            <p className="empty">Select a profile row above to inspect per-key hashes.</p>
+            <p className="empty">Select a profile row above to inspect per-key hashes and payloads.</p>
           )}
         </>
       ) : null}
@@ -1156,162 +1328,6 @@ function SetupPage({
   );
 }
 
-type ChatItem = {
-  role: "user" | "assistant";
-  text: string;
-  reasoning?: string[];
-  actions?: AgentAction[];
-  focus?: TriggerFocus;
-};
-
-function AgentPage({
-  connection,
-  domains,
-  connected,
-  onRefresh,
-  onTriggered,
-}: {
-  connection: Connection;
-  domains: Domain[];
-  connected: boolean;
-  onRefresh: () => void;
-  onTriggered: (focus: TriggerFocus) => void;
-}) {
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [messages, setMessages] = useState<ChatItem[]>([
-    {
-      role: "assistant",
-      text: "Ask me to search, attach a datasource, or trigger a recon. Every reasoning step stays visible.",
-      reasoning: [
-        "This tab talks to a separate agent URL when one is set for the environment.",
-        "Empty Agent URL uses the local tool agent against the Backend URL.",
-        "Search: “search csv”, “list party”, “show me pg-mongo”.",
-        "Trigger a profile: “run party pg-pg” or “trigger party pg-csv COUNTS”.",
-        "Trigger a whole domain: “run party” or “start recon for party”.",
-        "Attach: “attach landing and mongo to party pg-mongo”.",
-      ],
-    },
-  ]);
-
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    const utterance = input.trim();
-    if (!utterance || busy) {
-      return;
-    }
-    setInput("");
-    setMessages((current) => [
-      ...current,
-      { role: "user", text: utterance },
-      { role: "assistant", text: "Working…", reasoning: [] },
-    ]);
-    setBusy(true);
-    try {
-      const reply = await runAgent(connection, domains, utterance, (steps) => {
-        setMessages((current) => {
-          const next = [...current];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant") {
-            next[next.length - 1] = { ...last, reasoning: steps };
-          }
-          return next;
-        });
-      });
-      setMessages((current) => {
-        const next = [...current];
-        next[next.length - 1] = {
-          role: "assistant",
-          text: reply.text,
-          reasoning: reply.reasoning,
-          actions: reply.actions,
-          focus: reply.focus,
-        };
-        return next;
-      });
-      if (reply.actions.some((action) => action.name !== "search")) {
-        onRefresh();
-      }
-    } catch (err) {
-      setMessages((current) => {
-        const next = [...current];
-        const last = next[next.length - 1];
-        next[next.length - 1] = {
-          role: "assistant",
-          text: message(err),
-          reasoning: last?.reasoning?.length
-            ? [...last.reasoning, "The API call failed after the plan was built."]
-            : ["The API call failed after the plan was built."],
-        };
-        return next;
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!connected) {
-    return (
-      <>
-        <h1>Agent chat</h1>
-        <p className="lede">Connect first so the agent can see domains and trigger runs.</p>
-      </>
-    );
-  }
-
-  return (
-    <div className="chat-page">
-      <h1>Agent chat</h1>
-      <p className="lede">
-        Chat to search, attach datasources, and trigger a domain or profile. All reasoning is shown on every reply.
-      </p>
-      <div className="chat-log">
-        {messages.map((item, index) => (
-          <article key={index} className={`bubble ${item.role}`}>
-            <div className="bubble-role">{item.role === "user" ? "You" : "Agent"}</div>
-            {item.reasoning && item.reasoning.length > 0 ? (
-              <div className="reasoning">
-                <div className="reasoning-title">All reasoning</div>
-                <ol>
-                  {item.reasoning.map((step, stepIndex) => (
-                    <li key={stepIndex}>{step}</li>
-                  ))}
-                </ol>
-              </div>
-            ) : null}
-            {item.actions && item.actions.length > 0 ? (
-              <div className="actions">
-                {item.actions.map((action, actionIndex) => (
-                  <span key={actionIndex} className="chip">
-                    {action.name}: {action.detail}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            {item.focus?.runId ? (
-              <button type="button" className="btn secondary" onClick={() => onTriggered(item.focus!)}>
-                View run {item.focus.runId} in Audit
-              </button>
-            ) : null}
-            <pre className="bubble-text">{item.text}</pre>
-          </article>
-        ))}
-      </div>
-      <form className="chat-input" onSubmit={(event) => void send(event)}>
-        <input
-          value={input}
-          placeholder="run party pg-pg · search csv · attach landing and bq to party pg-bigquery"
-          onChange={(event) => setInput(event.target.value)}
-          disabled={busy}
-        />
-        <button className="btn" disabled={busy || !input.trim()}>
-          {busy ? "Working…" : "Send"}
-        </button>
-      </form>
-    </div>
-  );
-}
-
 function SelectField({
   label,
   value,
@@ -1347,11 +1363,12 @@ function Metric({ label, value, tone }: { label: string; value: number; tone?: "
   );
 }
 
-function runBody(mode: string, fields: string): { mode?: string; conditionFields?: string[] } {
+function runBody(mode: string, fields: string, forceFull = false): ReconRunBody {
   const conditionFields = splitList(fields);
   return {
     mode: mode || undefined,
     conditionFields: conditionFields.length ? conditionFields : undefined,
+    forceFull: forceFull || undefined,
   };
 }
 

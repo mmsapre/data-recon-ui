@@ -34,14 +34,13 @@ export function AgentPage({
   const [messages, setMessages] = useState<ChatItem[]>([
     {
       role: "assistant",
-      text: "Agentic chat only: search, attach, or trigger. For profile status, metrics, and match counts use Audit (operator UI) or the planned MCP server.",
+      text: "Sarvaj agent link is blank by default. Ask about distribution tracker status, consumer audit, and recon metrics — or search / attach / trigger runs.",
       reasoning: [
-        "This tab is separate from the operator console (Search, Run, Audit, Setup).",
-        "Empty Agent URL uses the local tool agent against the Backend URL.",
-        "A future MCP server will answer status / metrics / match queries for agents.",
-        "Search: “search csv”, “list party”, “show me pg-mongo”.",
-        "Trigger: “run party pg-pg”, “run party force full”, “trigger party pg-csv COUNTS”.",
-        "Attach: “attach landing and mongo to party pg-mongo”.",
+        "Sarvaj is the agent surface (separate from the operator console).",
+        "Leave Agent URL blank unless a remote Sarvaj / MCP endpoint is configured.",
+        "Know status of: distribution tracker, consumer audit, recon metrics.",
+        "Operator Audit still shows detailed match tables and CSV export.",
+        "Search: “search csv”, “list party”. Trigger: “run party pg-pg”, “run party force full”.",
       ],
     },
   ]);
@@ -105,27 +104,34 @@ export function AgentPage({
   if (!connected) {
     return (
       <>
-        <h1>Agentic</h1>
-        <p className="lede">Connect first. This surface is separate from operator Audit/metrics.</p>
+        <h1 title="Sarvaj — know status of distribution tracker, consumer audit, recon metrics">
+          Sarvaj
+        </h1>
+        <p className="lede">
+          Agent URL stays blank until configured. Connect first to enquire distribution tracker,
+          consumer audit, and recon metrics.
+        </p>
       </>
     );
   }
 
   return (
     <div className="chat-page">
-      <h1>Agentic</h1>
+      <h1 title="Sarvaj — know status of distribution tracker, consumer audit, recon metrics">
+        Sarvaj
+      </h1>
       <p className="lede">
-        Separate from the operator console. Chat to search, attach, or trigger. Profile status,
-        metrics, and match enquiry belong in Audit now and in MCP later — not here.
+        Agent link for status of distribution tracker, consumer audit, and recon metrics. Agent URL
+        is blank by default (local tools); set it only for a remote Sarvaj / MCP endpoint.
       </p>
       <div className="banner ok">
-        Operator metrics live under <strong>Audit</strong>. Planned MCP tools: profile status,
-        run metrics, match / mismatch counts.
+        <strong>Sarvaj</strong> — know status of distribution tracker · consumer audit · recon metrics.
+        Detailed tables stay under <strong>Audit & status</strong>.
       </div>
       <div className="chat-log">
         {messages.map((item, index) => (
           <article key={index} className={`bubble ${item.role}`}>
-            <div className="bubble-role">{item.role === "user" ? "You" : "Agent"}</div>
+            <div className="bubble-role">{item.role === "user" ? "You" : "Sarvaj"}</div>
             {item.reasoning && item.reasoning.length > 0 ? (
               <div className="reasoning">
                 <div className="reasoning-title">All reasoning</div>

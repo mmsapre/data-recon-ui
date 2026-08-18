@@ -2,17 +2,17 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, loadConnection, saveConnection, selectEnv, updateCurrentUrls } from "./api";
 import { AgentPage, filterCatalog } from "./agentic";
 import { ENVS } from "./config";
+import { ResultsPage } from "./ResultsPage";
+import { RunPage } from "./RunPage";
 import type {
   Connection,
   Datasource,
   Domain,
   EnvName,
   Page,
-  RecRecord,
-  ReconRunBody,
-  Run,
   TriggerFocus,
 } from "./types";
+import { message, runBody, splitList } from "./utils";
 
 /** Operator console pages. Agentic is separate (MCP will own status/metrics for agents). */
 const OPERATOR_PAGES: { id: Page; label: string }[] = [
@@ -22,8 +22,11 @@ const OPERATOR_PAGES: { id: Page; label: string }[] = [
   { id: "setup", label: "Setup" },
 ];
 
-const AGENTIC_PAGES: { id: Page; label: string }[] = [
-  { id: "agentic", label: "Agentic (separate)" },
+const SARVAJ_TOOLTIP =
+  "Sarvaj — know status of distribution tracker, consumer audit, recon metrics";
+
+const AGENTIC_PAGES: { id: Page; label: string; title: string }[] = [
+  { id: "agentic", label: "Sarvaj", title: SARVAJ_TOOLTIP },
 ];
 
 export default function App() {
@@ -79,8 +82,8 @@ export default function App() {
     try {
       await refresh();
       setNotice(
-        `Connected to ${connection.env.toUpperCase()} backend ${connection.backendUrl || "/api"}. Agent: ${
-          connection.agentUrl?.trim() || "local tools on backend"
+        `Connected to ${connection.env.toUpperCase()} backend ${connection.backendUrl || "/api"}. Sarvaj agent: ${
+          connection.agentUrl?.trim() || "blank (local tools)"
         }.`,
       );
     } catch (err) {
@@ -107,11 +110,14 @@ export default function App() {
               {item.label}
             </button>
           ))}
-          <div className="nav-group">Agentic · MCP later</div>
+          <div className="nav-group">Agent</div>
           {AGENTIC_PAGES.map((item) => (
             <button
               key={item.id}
+              type="button"
               className={page === item.id ? "active" : ""}
+              title={item.title}
+              aria-label={item.title}
               onClick={() => setPage(item.id)}
             >
               {item.label}
@@ -147,15 +153,19 @@ export default function App() {
           />
         </div>
         <div className="field">
-          <label>Agent URL</label>
+          <label title={SARVAJ_TOOLTIP}>Agent URL (Sarvaj)</label>
           <input
             className="url"
-            placeholder="optional separate agent"
+            title={SARVAJ_TOOLTIP}
+            placeholder="leave blank"
             value={connection.agentUrl}
             onChange={(event) => {
               setConnection(updateCurrentUrls(connection, { agentUrl: event.target.value }));
             }}
           />
+          <p className="field-hint" title={SARVAJ_TOOLTIP}>
+            Blank = local tools. Sarvaj: distribution tracker, consumer audit, recon metrics.
+          </p>
         </div>
         <div className="field">
           <label>Username</label>
@@ -200,6 +210,7 @@ export default function App() {
             domainId={domainId}
             profileId={profileId}
             busy={busy}
+            connected={connected}
             onDomain={setDomainId}
             onProfile={setProfileId}
             onBusy={setBusy}
@@ -214,6 +225,8 @@ export default function App() {
             domains={domains}
             connected={connected}
             focusRunId={focusRunId}
+            initialDomainId={domainId}
+            initialProfileId={profileId}
             onError={setError}
             onClearFocus={() => setFocusRunId(null)}
           />
@@ -271,6 +284,8 @@ function CatalogPage({
   const [mode, setMode] = useState("");
   const [fields, setFields] = useState("");
   const [forceFull, setForceFull] = useState(false);
+  const [runDomain, setRunDomain] = useState("");
+  const [runProfile, setRunProfile] = useState("");
   const [attachDomain, setAttachDomain] = useState("");
   const [attachProfile, setAttachProfile] = useState("");
   const [sourceDs, setSourceDs] = useState("");
@@ -278,6 +293,19 @@ function CatalogPage({
   const names = datasources.map((item) => item.name);
   const filtered = filterCatalog(domains, query);
   const attachProfiles = domains.find((item) => item.id === attachDomain)?.profiles ?? [];
+  const runProfiles = domains.find((item) => item.id === runDomain)?.profiles ?? [];
+
+  useEffect(() => {
+    if (!runDomain && domains[0]) {
+      setRunDomain(domains[0].id);
+    }
+  }, [domains, runDomain]);
+
+  useEffect(() => {
+    if (runProfiles.length > 0 && !runProfiles.some((item) => item.profileId === runProfile)) {
+      setRunProfile(runProfiles[0].profileId);
+    }
+  }, [runProfiles, runProfile]);
 
   useEffect(() => {
     if (!attachDomain && filtered[0]) {
@@ -352,7 +380,7 @@ function CatalogPage({
     return (
       <>
         <h1>Search & run</h1>
-        <p className="lede">Connect in the sidebar, then search a domain or profile and trigger recon.</p>
+        <p className="lede">Connect so domain/profile dropdowns load from the API.</p>
       </>
     );
   }
@@ -360,44 +388,90 @@ function CatalogPage({
     <>
       <h1>Search & run</h1>
       <p className="lede">
-        Search domains and profiles, then trigger. Default is incremental when a prior active run
-        exists; check Force full for a FULL compare. Audit opens on the new run.
+        Domains and profiles are loaded from the API. Use the dropdowns to pick one and Run, or browse
+        the catalog below. Prefer <strong>Run recon</strong> for the dedicated execute form.
       </p>
+      <section className="card">
+        <h2>Quick run (API dropdowns)</h2>
+        <div className="row">
+          <div className="field">
+            <label>Domain</label>
+            <select
+              value={runDomain}
+              onChange={(event) => {
+                setRunDomain(event.target.value);
+                const next = domains.find((item) => item.id === event.target.value);
+                setRunProfile(next?.profiles[0]?.profileId ?? "");
+              }}
+            >
+              {domains.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.id}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>Profile</label>
+            <select value={runProfile} onChange={(event) => setRunProfile(event.target.value)}>
+              {runProfiles.map((item) => (
+                <option key={item.profileId} value={item.profileId}>
+                  {item.profileId}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>Mode</label>
+            <select value={mode} onChange={(event) => setMode(event.target.value)}>
+              <option value="">Profile default</option>
+              <option value="COUNTS">COUNTS</option>
+              <option value="MISMATCH_DETAILS">MISMATCH_DETAILS</option>
+              <option value="FIELD_DETAILS">FIELD_DETAILS</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>Condition fields</label>
+            <input
+              placeholder="party_name, status"
+              value={fields}
+              onChange={(event) => setFields(event.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>Run scope</label>
+            <select
+              value={forceFull ? "full" : "incremental"}
+              onChange={(event) => setForceFull(event.target.value === "full")}
+            >
+              <option value="incremental">Incremental</option>
+              <option value="full">Force full</option>
+            </select>
+          </div>
+          <button
+            className="btn"
+            disabled={busy || !runDomain || !runProfile}
+            onClick={() => void triggerProfile(runDomain, runProfile)}
+          >
+            Run profile
+          </button>
+          <button
+            className="btn secondary"
+            disabled={busy || !runDomain}
+            onClick={() => void triggerDomain(runDomain)}
+          >
+            Run domain
+          </button>
+        </div>
+      </section>
       <div className="row">
         <div className="field" style={{ minWidth: 280, flex: 1 }}>
-          <label>Search domains and profiles</label>
+          <label>Search catalog</label>
           <input
             placeholder="party, pg-csv, mongo, tag…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-        </div>
-        <div className="field">
-          <label>Mode</label>
-          <select value={mode} onChange={(event) => setMode(event.target.value)}>
-            <option value="">Profile default</option>
-            <option value="COUNTS">COUNTS</option>
-            <option value="MISMATCH_DETAILS">MISMATCH_DETAILS</option>
-            <option value="FIELD_DETAILS">FIELD_DETAILS</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>Condition fields</label>
-          <input
-            placeholder="party_name, status"
-            value={fields}
-            onChange={(event) => setFields(event.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>Run scope</label>
-          <select
-            value={forceFull ? "full" : "incremental"}
-            onChange={(event) => setForceFull(event.target.value === "full")}
-          >
-            <option value="incremental">Incremental (default)</option>
-            <option value="full">Force full</option>
-          </select>
         </div>
       </div>
       <div className="chips">
@@ -490,664 +564,6 @@ function CatalogPage({
         </section>
       ))}
       {filtered.length === 0 ? <p className="empty">No domains or profiles matched the search.</p> : null}
-    </>
-  );
-}
-
-function RunPage({
-  connection,
-  domains,
-  domainId,
-  profileId,
-  busy,
-  onDomain,
-  onProfile,
-  onBusy,
-  onError,
-  onNotice,
-  onTriggered,
-}: {
-  connection: Connection;
-  domains: Domain[];
-  domainId: string;
-  profileId: string;
-  busy: boolean;
-  onDomain: (id: string) => void;
-  onProfile: (id: string) => void;
-  onBusy: (value: boolean) => void;
-  onError: (value: string | null) => void;
-  onNotice: (value: string | null) => void;
-  onTriggered: (focus: TriggerFocus) => void;
-}) {
-  const domain = domains.find((item) => item.id === domainId);
-  const [scope, setScope] = useState<"domain" | "profile">("profile");
-  const [mode, setMode] = useState("");
-  const [fields, setFields] = useState("");
-  const [forceFull, setForceFull] = useState(false);
-  const [search, setSearch] = useState("");
-  const visible = filterCatalog(domains, search);
-
-  async function trigger() {
-    if (!domainId) {
-      onError("Select a domain.");
-      return;
-    }
-    onBusy(true);
-    onError(null);
-    const body = runBody(mode, fields, forceFull);
-    try {
-      if (scope === "domain") {
-        const result = await api.runDomain(connection, domainId, body);
-        onNotice(`Domain run ${result.domainRunId} accepted for ${Object.keys(result.runIds).length} profile(s).`);
-        onTriggered({ domainId, runId: result.domainRunId });
-      } else {
-        if (!profileId) {
-          throw new Error("Select a profile.");
-        }
-        const result = await api.runProfile(connection, domainId, profileId, body);
-        onNotice(`Profile run ${result.runId} accepted for ${domainId}.${profileId}.`);
-        onTriggered({ domainId, profileId, runId: result.runId });
-      }
-    } catch (err) {
-      onError(message(err));
-    } finally {
-      onBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <h1>Run recon</h1>
-      <p className="lede">
-        Trigger a domain or profile. Incremental is the default; Force full compares everything.
-        Open Audit & status for metrics and match counts.
-      </p>
-      <div className="row">
-        <div className="field" style={{ minWidth: 200, flex: 1 }}>
-          <label>Search</label>
-          <input
-            placeholder="Filter domains and profiles"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </div>
-        <SelectField label="Domain" value={domainId} onChange={onDomain} options={visible.map((item) => item.id)} />
-        <div className="field">
-          <label>Scope</label>
-          <select value={scope} onChange={(event) => setScope(event.target.value as "domain" | "profile")}>
-            <option value="profile">One profile</option>
-            <option value="domain">Whole domain</option>
-          </select>
-        </div>
-        {scope === "profile" ? (
-          <SelectField
-            label="Profile"
-            value={profileId}
-            onChange={onProfile}
-            options={
-              (visible.find((item) => item.id === domainId) ?? domain)?.profiles.map((item) => item.profileId) ?? []
-            }
-          />
-        ) : null}
-        <div className="field">
-          <label>Mode</label>
-          <select value={mode} onChange={(event) => setMode(event.target.value)}>
-            <option value="">Profile default</option>
-            <option value="COUNTS">COUNTS</option>
-            <option value="MISMATCH_DETAILS">MISMATCH_DETAILS</option>
-            <option value="FIELD_DETAILS">FIELD_DETAILS</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>Condition fields</label>
-          <input
-            placeholder="party_name, status"
-            value={fields}
-            onChange={(event) => setFields(event.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>Run scope</label>
-          <select
-            value={forceFull ? "full" : "incremental"}
-            onChange={(event) => setForceFull(event.target.value === "full")}
-          >
-            <option value="incremental">Incremental (default)</option>
-            <option value="full">Force full</option>
-          </select>
-        </div>
-        <button className="btn" disabled={busy} onClick={() => void trigger()}>
-          Run
-        </button>
-      </div>
-    </>
-  );
-}
-
-function ResultsPage({
-  connection,
-  domains,
-  connected,
-  focusRunId,
-  onError,
-  onClearFocus,
-}: {
-  connection: Connection;
-  domains: Domain[];
-  connected: boolean;
-  focusRunId: number | null;
-  onError: (value: string | null) => void;
-  onClearFocus: () => void;
-}) {
-  const [filterDomain, setFilterDomain] = useState("");
-  const [filterProfile, setFilterProfile] = useState("");
-  const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<"all" | "domain" | "profile">("all");
-  const [activeOnly, setActiveOnly] = useState(false);
-  const [runStatus, setRunStatus] = useState("");
-  const [runScopeFilter, setRunScopeFilter] = useState("");
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [selected, setSelected] = useState<Run | null>(null);
-  const [recordStatus, setRecordStatus] = useState("");
-  const [records, setRecords] = useState<RecRecord[]>([]);
-  const [reloadToken, setReloadToken] = useState(0);
-
-  useEffect(() => {
-    if (!connected) {
-      setRuns([]);
-      setSelected(null);
-      return;
-    }
-    let cancelled = false;
-    const load = async () => {
-      onError(null);
-      try {
-        const list = await api.runs(connection);
-        if (cancelled) {
-          return;
-        }
-        setRuns(list);
-      } catch (err) {
-        if (!cancelled) {
-          onError(message(err));
-        }
-      }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [connected, connection, onError, reloadToken]);
-
-  const domain = domains.find((item) => item.id === filterDomain);
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return runs.filter((run) => {
-      if (filterDomain && run.domainId !== filterDomain) {
-        return false;
-      }
-      if (filterProfile && run.profileId !== filterProfile) {
-        return false;
-      }
-      if (kind === "domain" && run.profileId) {
-        return false;
-      }
-      if (kind === "profile" && !run.profileId) {
-        return false;
-      }
-      if (activeOnly && !run.active) {
-        return false;
-      }
-      if (runStatus && run.status !== runStatus) {
-        return false;
-      }
-      if (runScopeFilter && (run.runScope ?? "") !== runScopeFilter) {
-        return false;
-      }
-      if (!needle) {
-        return true;
-      }
-      return [
-        String(run.id),
-        run.domainId,
-        run.profileId,
-        run.status,
-        run.reconMode,
-        run.runScope,
-        String(run.domainRunId ?? ""),
-        String(run.baselineRunId ?? ""),
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle));
-    });
-  }, [runs, filterDomain, filterProfile, kind, activeOnly, runStatus, runScopeFilter, query]);
-
-  useEffect(() => {
-    if (focusRunId) {
-      const focused = runs.find((run) => run.id === focusRunId) ?? filtered.find((run) => run.id === focusRunId);
-      if (focused) {
-        setSelected(focused);
-      }
-      return;
-    }
-    if (filtered.length === 0) {
-      setSelected(null);
-      return;
-    }
-    setSelected((current) => {
-      if (current && filtered.some((run) => run.id === current.id)) {
-        return filtered.find((run) => run.id === current.id) ?? current;
-      }
-      return filtered[0];
-    });
-  }, [filtered, focusRunId, runs]);
-
-  useEffect(() => {
-    if (!selected || !selected.profileId) {
-      setRecords([]);
-      return;
-    }
-    void api
-      .records(connection, selected.id, recordStatus || undefined)
-      .then(setRecords)
-      .catch((err) => onError(message(err)));
-  }, [selected, recordStatus, connection, onError]);
-
-  useEffect(() => {
-    if (!runs.some((run) => run.status === "RUNNING")) {
-      return;
-    }
-    const timer = window.setInterval(() => setReloadToken((value) => value + 1), 3000);
-    return () => window.clearInterval(timer);
-  }, [runs]);
-
-  const profileTotals = filtered.filter((run) => run.profileId);
-  const activeProfiles = useMemo(
-    () => runs.filter((run) => run.active && run.profileId),
-    [runs],
-  );
-  const childRuns = selected && !selected.profileId
-    ? runs.filter((run) => run.domainRunId === selected.id && run.profileId)
-    : [];
-
-  function pickRun(run: Run) {
-    setSelected(run);
-    if (focusRunId && run.id !== focusRunId) {
-      onClearFocus();
-    }
-  }
-
-  if (!connected) {
-    return (
-      <>
-        <h1>Audit & status</h1>
-        <p className="lede">Connect in the sidebar to load profile status, metrics, and match counts.</p>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <h1>Audit & status</h1>
-      <p className="lede">
-        Operator view of profile status, run metrics, and match / mismatch counts. Agentic chat does
-        not own this; a future MCP server will expose the same enquiry for agents.
-      </p>
-      <h2 className="section-title">Active profile status</h2>
-      <div className="metrics">
-        <Metric label="Active profiles" value={activeProfiles.length} />
-        <Metric
-          label="Matched"
-          value={activeProfiles.reduce((sum, run) => sum + (run.matchedCount ?? 0), 0)}
-          tone="ok"
-        />
-        <Metric
-          label="Mismatched"
-          value={activeProfiles.reduce((sum, run) => sum + (run.mismatchedCount ?? 0), 0)}
-          tone="bad"
-        />
-        <Metric
-          label="Source only"
-          value={activeProfiles.reduce((sum, run) => sum + (run.sourceOnlyCount ?? 0), 0)}
-        />
-        <Metric
-          label="Target only"
-          value={activeProfiles.reduce((sum, run) => sum + (run.targetOnlyCount ?? 0), 0)}
-        />
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Domain</th>
-              <th>Profile</th>
-              <th>Run</th>
-              <th>Status</th>
-              <th>Scope</th>
-              <th>Baseline</th>
-              <th>Mode</th>
-              <th>Match</th>
-              <th>Mismatch</th>
-              <th>Src only</th>
-              <th>Tgt only</th>
-              <th>Completed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {activeProfiles.map((run) => (
-              <tr
-                key={run.id}
-                className={`clickable${selected?.id === run.id ? " selected" : ""}`}
-                onClick={() => pickRun(run)}
-              >
-                <td>{run.domainId}</td>
-                <td>{run.profileId}</td>
-                <td>{run.id}</td>
-                <td className={`status ${run.status}`}>{run.status}</td>
-                <td>
-                  <span className={`scope ${(run.runScope ?? "").toLowerCase()}`}>
-                    {run.runScope ?? "—"}
-                  </span>
-                </td>
-                <td>{run.baselineRunId ?? "—"}</td>
-                <td>{run.reconMode}</td>
-                <td>{run.matchedCount}</td>
-                <td className={run.mismatchedCount ? "status MISMATCHED" : ""}>{run.mismatchedCount}</td>
-                <td>{run.sourceOnlyCount}</td>
-                <td>{run.targetOnlyCount}</td>
-                <td>{formatTime(run.completedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {activeProfiles.length === 0 ? <p className="empty">No active profile runs yet.</p> : null}
-      <h2 className="section-title">Run history</h2>
-      <div className="row">
-        <div className="field" style={{ minWidth: 180, flex: 1 }}>
-          <label>Search runs</label>
-          <input
-            placeholder="run id, domain, profile, status, scope…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label>Domain</label>
-          <select
-            value={filterDomain}
-            onChange={(event) => {
-              setFilterDomain(event.target.value);
-              setFilterProfile("");
-              onClearFocus();
-            }}
-          >
-            <option value="">All domains</option>
-            {domains.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.id}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>Profile</label>
-          <select
-            value={filterProfile}
-            onChange={(event) => {
-              setFilterProfile(event.target.value);
-              onClearFocus();
-            }}
-            disabled={!filterDomain}
-          >
-            <option value="">All profiles</option>
-            {(domain?.profiles ?? []).map((item) => (
-              <option key={item.profileId} value={item.profileId}>
-                {item.profileId}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>Kind</label>
-          <select value={kind} onChange={(event) => setKind(event.target.value as "all" | "domain" | "profile")}>
-            <option value="all">Domain + profile</option>
-            <option value="domain">Domain runs</option>
-            <option value="profile">Profile runs</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>Run status</label>
-          <select value={runStatus} onChange={(event) => setRunStatus(event.target.value)}>
-            <option value="">All</option>
-            <option value="RUNNING">RUNNING</option>
-            <option value="COMPLETED">COMPLETED</option>
-            <option value="FAILED">FAILED</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>Scope</label>
-          <select value={runScopeFilter} onChange={(event) => setRunScopeFilter(event.target.value)}>
-            <option value="">All</option>
-            <option value="FULL">FULL</option>
-            <option value="INCREMENTAL">INCREMENTAL</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>Latest only</label>
-          <select value={activeOnly ? "yes" : "no"} onChange={(event) => setActiveOnly(event.target.value === "yes")}>
-            <option value="no">All history</option>
-            <option value="yes">Active only</option>
-          </select>
-        </div>
-        <button className="btn secondary" onClick={() => setReloadToken((value) => value + 1)}>
-          Reload
-        </button>
-      </div>
-      <div className="metrics">
-        <Metric label="Runs" value={filtered.length} />
-        <Metric label="Running" value={filtered.filter((run) => run.status === "RUNNING").length} />
-        <Metric label="Failed" value={filtered.filter((run) => run.status === "FAILED").length} tone="bad" />
-        <Metric
-          label="Mismatched keys"
-          value={profileTotals.reduce((sum, run) => sum + (run.mismatchedCount ?? 0), 0)}
-          tone="bad"
-        />
-        <Metric
-          label="Matched keys"
-          value={profileTotals.reduce((sum, run) => sum + (run.matchedCount ?? 0), 0)}
-          tone="ok"
-        />
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Run</th>
-              <th>Kind</th>
-              <th>Domain</th>
-              <th>Profile</th>
-              <th>Domain run</th>
-              <th>Status</th>
-              <th>Scope</th>
-              <th>Baseline</th>
-              <th>Mode</th>
-              <th>Active</th>
-              <th>Src</th>
-              <th>Tgt</th>
-              <th>Match</th>
-              <th>Mismatch</th>
-              <th>Src only</th>
-              <th>Tgt only</th>
-              <th>Started</th>
-              <th>Completed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((run) => (
-              <tr
-                key={run.id}
-                className={`clickable${selected?.id === run.id ? " selected" : ""}`}
-                onClick={() => pickRun(run)}
-              >
-                <td>{run.id}</td>
-                <td>{run.profileId ? "profile" : "domain"}</td>
-                <td>{run.domainId}</td>
-                <td>{run.profileId ?? "—"}</td>
-                <td>{run.domainRunId ?? (run.profileId ? "—" : run.id)}</td>
-                <td className={`status ${run.status}`}>{run.status}</td>
-                <td>
-                  <span className={`scope ${(run.runScope ?? "").toLowerCase()}`}>
-                    {run.runScope ?? "—"}
-                  </span>
-                </td>
-                <td>{run.baselineRunId ?? "—"}</td>
-                <td>{run.reconMode}</td>
-                <td>{run.active ? "yes" : ""}</td>
-                <td>{run.sourceCount}</td>
-                <td>{run.targetCount}</td>
-                <td>{run.matchedCount}</td>
-                <td className={run.mismatchedCount ? "status MISMATCHED" : ""}>{run.mismatchedCount}</td>
-                <td>{run.sourceOnlyCount}</td>
-                <td>{run.targetOnlyCount}</td>
-                <td>{formatTime(run.startedAt)}</td>
-                <td>{formatTime(run.completedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {filtered.length === 0 ? <p className="empty">No runs match these filters.</p> : null}
-      {selected ? (
-        <>
-          <h2 className="section-title">
-            {selected.profileId
-              ? `Profile result ${selected.domainId}.${selected.profileId} · run ${selected.id}`
-              : `Domain result ${selected.domainId} · domain run ${selected.id}`}
-          </h2>
-          {selected.errorMessage ? <div className="banner error">{selected.errorMessage}</div> : null}
-          <div className="metrics">
-            <Metric label="Source" value={selected.sourceCount} />
-            <Metric label="Target" value={selected.targetCount} />
-            <Metric label="Matched" value={selected.matchedCount} tone="ok" />
-            <Metric label="Mismatched" value={selected.mismatchedCount} tone="bad" />
-            <Metric label="Source only" value={selected.sourceOnlyCount} />
-            <Metric label="Target only" value={selected.targetOnlyCount} />
-          </div>
-          <div className="chips">
-            <span className="chip">Scope: {selected.runScope ?? "—"}</span>
-            <span className="chip">Baseline: {selected.baselineRunId ?? "—"}</span>
-            <span className="chip">Mode: {selected.reconMode ?? "—"}</span>
-            {(selected.conditionFields ?? []).length ? (
-              <span className="chip">Fields: {(selected.conditionFields ?? []).join(", ")}</span>
-            ) : null}
-          </div>
-          {selected.sourceQuery || selected.targetQuery ? (
-            <div className="row">
-              {selected.sourceQuery ? (
-                <div className="field" style={{ flex: 1 }}>
-                  <label>Source query</label>
-                  <pre className="query">{selected.sourceQuery}</pre>
-                </div>
-              ) : null}
-              {selected.targetQuery ? (
-                <div className="field" style={{ flex: 1 }}>
-                  <label>Target query</label>
-                  <pre className="query">{selected.targetQuery}</pre>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {childRuns.length > 0 ? (
-            <>
-              <h3 className="section-title">Profiles in this domain run</h3>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Run</th>
-                      <th>Profile</th>
-                      <th>Status</th>
-                      <th>Scope</th>
-                      <th>Match</th>
-                      <th>Mismatch</th>
-                      <th>Src only</th>
-                      <th>Tgt only</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {childRuns.map((run) => (
-                      <tr
-                        key={run.id}
-                        className="clickable"
-                        onClick={() => pickRun(run)}
-                      >
-                        <td>{run.id}</td>
-                        <td>{run.profileId}</td>
-                        <td className={`status ${run.status}`}>{run.status}</td>
-                        <td>{run.runScope ?? "—"}</td>
-                        <td>{run.matchedCount}</td>
-                        <td className={run.mismatchedCount ? "status MISMATCHED" : ""}>{run.mismatchedCount}</td>
-                        <td>{run.sourceOnlyCount}</td>
-                        <td>{run.targetOnlyCount}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          ) : null}
-          {selected.profileId ? (
-            <>
-              <div className="row">
-                <div className="field">
-                  <label>Record status</label>
-                  <select value={recordStatus} onChange={(event) => setRecordStatus(event.target.value)}>
-                    <option value="">All stored rows</option>
-                    <option value="MISMATCHED">MISMATCHED</option>
-                    <option value="SOURCE_ONLY">SOURCE_ONLY</option>
-                    <option value="TARGET_ONLY">TARGET_ONLY</option>
-                    <option value="MATCHED">MATCHED</option>
-                  </select>
-                </div>
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>MigrationKey</th>
-                      <th>Status</th>
-                      <th>Source hash</th>
-                      <th>Target hash</th>
-                      <th>Field diffs</th>
-                      <th>Source payload</th>
-                      <th>Target payload</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {records.map((record) => (
-                      <tr key={record.migrationKey}>
-                        <td className="mono">{record.migrationKey}</td>
-                        <td className={`status ${record.status}`}>{record.status}</td>
-                        <td className="mono">{record.sourceHash}</td>
-                        <td className="mono">{record.targetHash}</td>
-                        <td className="mono">{record.fieldDiffs}</td>
-                        <td className="mono payload">{record.sourcePayload ?? ""}</td>
-                        <td className="mono payload">{record.targetPayload ?? ""}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {records.length === 0 ? (
-                <p className="empty">No detail rows for this filter (COUNTS runs store none).</p>
-              ) : null}
-            </>
-          ) : (
-            <p className="empty">Select a profile row above to inspect per-key hashes and payloads.</p>
-          )}
-        </>
-      ) : null}
     </>
   );
 }
@@ -1354,39 +770,3 @@ function SelectField({
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: number; tone?: "ok" | "bad" }) {
-  return (
-    <div className={`metric ${tone ?? ""}`}>
-      <div className="label">{label}</div>
-      <div className="value">{value}</div>
-    </div>
-  );
-}
-
-function runBody(mode: string, fields: string, forceFull = false): ReconRunBody {
-  const conditionFields = splitList(fields);
-  return {
-    mode: mode || undefined,
-    conditionFields: conditionFields.length ? conditionFields : undefined,
-    forceFull: forceFull || undefined,
-  };
-}
-
-function splitList(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-function formatTime(value: string | null): string {
-  if (!value) {
-    return "";
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}

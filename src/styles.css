@@ -82,7 +82,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
   background: #fff;
 }
 .field textarea { min-height: 4.5rem; resize: vertical; }
-.field input.url { font-size: 0.78rem; }
+.field-hint {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin: 0.25rem 0 0;
+  line-height: 1.35;
+}
 
 .main { padding: 1.5rem 2rem 3rem; max-width: 1400px; }
 h1 { font-size: 1.7rem; margin: 0 0 0.35rem; }
@@ -243,3 +248,46 @@ tr.clickable:hover, tr.selected { background: #fff4f4; }
 .bubble .btn { margin: 0.4rem 0; }
 .chat-input { display: flex; gap: 0.5rem; }
 .chat-input input { flex: 1; border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.55rem 0.7rem; }
+
+.hint { color: var(--muted); font-size: 0.85rem; margin: 0.5rem 0 0; }
+.hint code { font-size: 0.8rem; }
+
+.chart-card {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--card);
+  padding: 0.75rem 1rem 0.5rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+.chart-legend { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.8rem; }
+.leg::before {
+  content: "";
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.2rem;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+  border-radius: 1px;
+}
+.leg.ok::before { background: var(--ok); }
+.leg.bad::before { background: var(--bad); }
+.leg.src::before { background: #6c63ff; }
+.leg.tgt::before { background: #d4a017; }
+.trend-chart { width: 100%; max-width: 760px; height: auto; display: block; }
+.trend-chart .grid { stroke: var(--line); stroke-width: 1; }
+.trend-chart .axis { fill: var(--muted); font-size: 10px; }
+.trend-chart .line { stroke-width: 2; }
+.trend-chart .line.ok { stroke: var(--ok); }
+.trend-chart .line.bad { stroke: var(--bad); }
+.trend-chart .line.src { stroke: #6c63ff; }
+.trend-chart .line.tgt { stroke: #d4a017; }
+.trend-chart .dot.bad { fill: var(--bad); }
+

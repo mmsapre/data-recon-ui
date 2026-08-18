@@ -40,10 +40,24 @@ The Data Recon service allows the UI origin (`DATA_RECON_CORS_ORIGIN`, default `
 
 | Page | What it does |
 |---|---|
-| Search & run | Search domains/profiles (incl. tags), attach datasources, trigger with **Incremental** (default) or **Force full** |
-| Run recon | Same trigger with pickers |
-| Audit & status | **Active profile status** (metrics + match counts), run history with `runScope` / `baselineRunId`, per-key hashes and payloads |
+| Search & run | **API dropdowns** for domain/profile quick run, catalog browse, attach datasources |
+| Run recon | Dedicated execute form: pick domain/profile from `GET /api/domains`, then Run |
+| Audit & status | Domain/profile dropdowns, historical runs, **mismatches on row select**, **time trend chart by profile**, **Export CSV** |
 | Setup | Add in-memory domain or profile |
+
+### Run flow
+
+1. Connect → domains/profiles load from the API (backed by recon config / catalog).
+2. On **Run recon** (or Search & run quick run), select **Domain** and **Profile** from dropdowns.
+3. Optionally set mode / condition fields / Force full.
+4. Click **Run** → opens Audit on that run.
+
+### Audit & status
+
+1. Filter with **Domain** and **Profile** dropdowns (API catalog).
+2. **Trend chart** shows matched / mismatched / source-only / target-only over time for the selected profile (last 30 runs).
+3. Click a **historical row** → mismatch detail table loads (default `MISMATCHED`) with payloads when present.
+4. **Export runs CSV** / **Export mismatches CSV** download the current tables.
 
 ### Incremental vs force full
 
@@ -51,13 +65,13 @@ POST run bodies accept `forceFull: true`. Without it, Data Recon uses an **INCRE
 
 ### Status & metrics (operator / future MCP)
 
-`GET /api/runs?active=true` drives the **Active profile status** panel:
+`GET /api/runs` (and `?active=true`) drive status panels and charts:
 
 - profile run status (`COMPLETED` / `RUNNING` / `FAILED`)
 - matched / mismatched / source-only / target-only counts
 - scope and baseline
 
-A future MCP server should wrap the same enquiry (profile status, metrics, match status) for agents — do not fold that into the operator pages or into agentic chat.
+A future MCP server should wrap the same enquiry for agents — do not fold that into agentic chat.
 
 ## Agentic (separate)
 

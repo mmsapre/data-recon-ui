@@ -1,9 +1,11 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { api, loadConnection, saveConnection, selectEnv, updateCurrentUrls } from "./api";
 import { AgentPage, filterCatalog } from "./agentic";
 import { ENVS } from "./config";
 import { ResultsPage } from "./ResultsPage";
 import { RunPage } from "./RunPage";
+import { SetupPage } from "./SetupPage";
+import { isSupportedDatasource } from "./setupTypes";
 import type {
   Connection,
   Datasource,
@@ -12,7 +14,7 @@ import type {
   Page,
   TriggerFocus,
 } from "./types";
-import { message, runBody, splitList } from "./utils";
+import { message, runBody } from "./utils";
 
 /** Operator console pages. Agentic is separate (MCP will own status/metrics for agents). */
 const OPERATOR_PAGES: { id: Page; label: string }[] = [
@@ -290,10 +292,11 @@ function CatalogPage({
   const [attachProfile, setAttachProfile] = useState("");
   const [sourceDs, setSourceDs] = useState("");
   const [targetDs, setTargetDs] = useState("");
-  const names = datasources.map((item) => item.name);
+  const names = datasources.filter(isSupportedDatasource).map((item) => item.name);
   const filtered = filterCatalog(domains, query);
   const attachProfiles = domains.find((item) => item.id === attachDomain)?.profiles ?? [];
   const runProfiles = domains.find((item) => item.id === runDomain)?.profiles ?? [];
+  const supportedSources = datasources.filter(isSupportedDatasource);
 
   useEffect(() => {
     if (!runDomain && domains[0]) {
@@ -475,13 +478,12 @@ function CatalogPage({
         </div>
       </div>
       <div className="chips">
-        {datasources.map((item) => (
+        {supportedSources.map((item) => (
           <span key={item.name} className="chip">
             {item.name} · {item.type}
-            {(item.tags ?? []).length ? ` · ${(item.tags ?? []).join(",")}` : ""}
           </span>
         ))}
-        {datasources.length === 0 ? <span className="empty">No datasources.</span> : null}
+        {supportedSources.length === 0 ? <span className="empty">No Postgres / Mongo / BigQuery datasources.</span> : null}
       </div>
       <form className="card" onSubmit={(event) => void attach(event)}>
         <h2>Add datasource to a profile</h2>
@@ -564,182 +566,6 @@ function CatalogPage({
         </section>
       ))}
       {filtered.length === 0 ? <p className="empty">No domains or profiles matched the search.</p> : null}
-    </>
-  );
-}
-
-function SetupPage({
-  connection,
-  datasources,
-  domains,
-  busy,
-  onBusy,
-  onError,
-  onNotice,
-  onRefresh,
-}: {
-  connection: Connection;
-  datasources: Datasource[];
-  domains: Domain[];
-  busy: boolean;
-  onBusy: (value: boolean) => void;
-  onError: (value: string | null) => void;
-  onNotice: (value: string | null) => void;
-  onRefresh: () => void;
-}) {
-  const names = useMemo(() => datasources.map((item) => item.name), [datasources]);
-  const [domainId, setDomainId] = useState("");
-  const [schedule, setSchedule] = useState("");
-  const [profileDomain, setProfileDomain] = useState(domains[0]?.id ?? "");
-  const [profileId, setProfileId] = useState("");
-  const [sourceDs, setSourceDs] = useState(names[0] ?? "");
-  const [targetDs, setTargetDs] = useState(names[1] ?? names[0] ?? "");
-  const [keyColumn, setKeyColumn] = useState("party_id");
-  const [fields, setFields] = useState("party_name, status");
-  const [sourceTable, setSourceTable] = useState("party");
-  const [targetTable, setTargetTable] = useState("party");
-  const [sourceQuery, setSourceQuery] = useState("");
-  const [targetQuery, setTargetQuery] = useState("");
-  const [mode, setMode] = useState("MISMATCH_DETAILS");
-
-  useEffect(() => {
-    if (!profileDomain && domains[0]) {
-      setProfileDomain(domains[0].id);
-    }
-  }, [domains, profileDomain]);
-
-  async function addDomain(event: FormEvent) {
-    event.preventDefault();
-    onBusy(true);
-    onError(null);
-    try {
-      await api.createDomain(connection, { id: domainId, schedule: schedule || undefined });
-      onNotice(`Domain ${domainId} created.`);
-      setDomainId("");
-      onRefresh();
-    } catch (err) {
-      onError(message(err));
-    } finally {
-      onBusy(false);
-    }
-  }
-
-  async function addProfile(event: FormEvent) {
-    event.preventDefault();
-    onBusy(true);
-    onError(null);
-    const fieldList = splitList(fields);
-    try {
-      await api.createProfile(connection, profileDomain, {
-        id: profileId,
-        datasources: { source: sourceDs, target: targetDs },
-        migrationKey: { type: "SINGLE", columns: [keyColumn] },
-        recon: { mode, conditionFields: fieldList },
-        source: {
-          datasource: sourceDs,
-          table: sourceTable || undefined,
-          fields: fieldList,
-          query: sourceQuery || undefined,
-        },
-        target: {
-          datasource: targetDs,
-          table: targetTable || undefined,
-          fields: fieldList,
-          query: targetQuery || undefined,
-        },
-      });
-      onNotice(`Profile ${profileDomain}.${profileId} created.`);
-      setProfileId("");
-      onRefresh();
-    } catch (err) {
-      onError(message(err));
-    } finally {
-      onBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <h1>Setup</h1>
-      <p className="lede">
-        Add an in-memory domain or profile. Datasource names must already exist in YAML. Restart of
-        Data Recon drops API-added catalog entries.
-      </p>
-      <form className="card" onSubmit={(event) => void addDomain(event)}>
-        <h2>New domain</h2>
-        <div className="row">
-          <div className="field">
-            <label>Id</label>
-            <input required value={domainId} onChange={(event) => setDomainId(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>Schedule</label>
-            <input placeholder="1h" value={schedule} onChange={(event) => setSchedule(event.target.value)} />
-          </div>
-          <button className="btn" disabled={busy}>
-            Add domain
-          </button>
-        </div>
-      </form>
-      <form className="card" onSubmit={(event) => void addProfile(event)}>
-        <h2>New profile</h2>
-        <div className="row">
-          <SelectField label="Domain" value={profileDomain} onChange={setProfileDomain} options={domains.map((item) => item.id)} />
-          <div className="field">
-            <label>Profile id</label>
-            <input required value={profileId} onChange={(event) => setProfileId(event.target.value)} />
-          </div>
-          <SelectField label="Source datasource" value={sourceDs} onChange={setSourceDs} options={names} />
-          <SelectField label="Target datasource" value={targetDs} onChange={setTargetDs} options={names} />
-        </div>
-        <div className="row">
-          <div className="field">
-            <label>Migration key</label>
-            <input value={keyColumn} onChange={(event) => setKeyColumn(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>Fields</label>
-            <input value={fields} onChange={(event) => setFields(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>Source table</label>
-            <input value={sourceTable} onChange={(event) => setSourceTable(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>Target table</label>
-            <input value={targetTable} onChange={(event) => setTargetTable(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>Mode</label>
-            <select value={mode} onChange={(event) => setMode(event.target.value)}>
-              <option>COUNTS</option>
-              <option>MISMATCH_DETAILS</option>
-              <option>FIELD_DETAILS</option>
-            </select>
-          </div>
-        </div>
-        <div className="row">
-          <div className="field" style={{ flex: 1 }}>
-            <label>Source query (optional)</label>
-            <textarea
-              placeholder='SELECT id AS "MigrationKey", name FROM landing.party'
-              value={sourceQuery}
-              onChange={(event) => setSourceQuery(event.target.value)}
-            />
-          </div>
-          <div className="field" style={{ flex: 1 }}>
-            <label>Target query (optional)</label>
-            <textarea
-              placeholder='{} or SQL'
-              value={targetQuery}
-              onChange={(event) => setTargetQuery(event.target.value)}
-            />
-          </div>
-        </div>
-        <button className="btn" disabled={busy}>
-          Add profile
-        </button>
-      </form>
     </>
   );
 }

@@ -9,6 +9,7 @@ import type {
   ReconRunBody,
   Run,
 } from "./types";
+import type { DatasourceUpsertBody } from "./setupTypes";
 
 const STORAGE_KEY = "data-recon-ui.connection";
 
@@ -133,6 +134,8 @@ function parseError(text: string, status: number): string {
 
 export const api = {
   datasources: (c: Connection) => request<Datasource[]>(c, "/api/datasources"),
+  createDatasource: (c: Connection, body: DatasourceUpsertBody) =>
+    request<Datasource>(c, "/api/datasources", { method: "POST", body: JSON.stringify(body) }),
   domains: (c: Connection) => request<Domain[]>(c, "/api/domains"),
   domain: (c: Connection, id: string) => request<Domain>(c, `/api/domains/${id}`),
   createDomain: (c: Connection, body: unknown) =>

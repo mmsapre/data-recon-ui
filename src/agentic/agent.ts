@@ -154,7 +154,7 @@ async function runLocalAgent(
 
   if (isAttach(lower)) {
     note("Intent: attach named datasources to a profile.");
-    return attachReply(connection, domains, text, reasoning, domain, profile, note);
+    return attachReply(connection, text, reasoning, domain, profile, note);
   }
 
   if (isTrigger(lower) || looksLikeRunShortcut(text, domain, profile)) {
@@ -235,7 +235,6 @@ function searchReply(
 
 async function attachReply(
   connection: Connection,
-  domains: Domain[],
   text: string,
   reasoning: string[],
   domain: Domain | null,

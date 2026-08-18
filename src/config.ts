@@ -2,7 +2,7 @@ import type { EnvName, EnvEndpoints } from "./types";
 
 export const ENVS: EnvName[] = ["dev", "uat", "sit", "prod"];
 
-function envValue(name: string): string {
+function envValue(name: keyof ImportMetaEnv): string {
   const value = import.meta.env[name];
   return typeof value === "string" ? value.trim() : "";
 }

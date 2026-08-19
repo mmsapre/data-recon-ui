@@ -53,7 +53,8 @@ export function SetupPage({
   const [credentialsFile, setCredentialsFile] = useState("");
 
   const [domainId, setDomainId] = useState("");
-  const [schedule, setSchedule] = useState("");
+  const [domainSourceDs, setDomainSourceDs] = useState(names[0] ?? "");
+  const [domainTargetDs, setDomainTargetDs] = useState(names[1] ?? names[0] ?? "");
   const [profileDomain, setProfileDomain] = useState(domains[0]?.id ?? "");
   const [profileId, setProfileId] = useState("");
   const [sourceDs, setSourceDs] = useState(names[0] ?? "");
@@ -84,7 +85,13 @@ export function SetupPage({
     if (!names.includes(targetDs)) {
       setTargetDs(names[1] ?? names[0]);
     }
-  }, [names, sourceDs, targetDs]);
+    if (!names.includes(domainSourceDs)) {
+      setDomainSourceDs(names[0]);
+    }
+    if (!names.includes(domainTargetDs)) {
+      setDomainTargetDs(names[1] ?? names[0]);
+    }
+  }, [names, sourceDs, targetDs, domainSourceDs, domainTargetDs]);
 
   async function addDatasource(event: FormEvent) {
     event.preventDefault();
@@ -141,7 +148,17 @@ export function SetupPage({
     onBusy(true);
     onError(null);
     try {
-      await api.createDomain(connection, { id: domainId, schedule: schedule || undefined });
+      const body: {
+        id: string;
+        datasources?: { source?: string; target?: string };
+      } = { id: domainId };
+      if (domainSourceDs || domainTargetDs) {
+        body.datasources = {
+          ...(domainSourceDs ? { source: domainSourceDs } : {}),
+          ...(domainTargetDs ? { target: domainTargetDs } : {}),
+        };
+      }
+      await api.createDomain(connection, body);
       onNotice(`Domain ${domainId} created.`);
       setDomainId("");
       onRefresh();
@@ -330,14 +347,33 @@ export function SetupPage({
 
       <form className="card" onSubmit={(event) => void addDomain(event)}>
         <h2>New domain</h2>
+        <p className="hint">Runs are API-triggered only — there is no schedule field.</p>
         <div className="row">
           <div className="field">
             <label>Id</label>
             <input required value={domainId} onChange={(event) => setDomainId(event.target.value)} />
           </div>
           <div className="field">
-            <label>Schedule (optional)</label>
-            <input placeholder="1h" value={schedule} onChange={(event) => setSchedule(event.target.value)} />
+            <label>Default source (optional)</label>
+            <select value={domainSourceDs} onChange={(event) => setDomainSourceDs(event.target.value)}>
+              <option value="">None</option>
+              {names.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>Default target (optional)</label>
+            <select value={domainTargetDs} onChange={(event) => setDomainTargetDs(event.target.value)}>
+              <option value="">None</option>
+              {names.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
           </div>
           <button className="btn" disabled={busy}>
             Add domain

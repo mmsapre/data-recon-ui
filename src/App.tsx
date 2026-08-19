@@ -292,6 +292,9 @@ function CatalogPage({
   const [attachProfile, setAttachProfile] = useState("");
   const [sourceDs, setSourceDs] = useState("");
   const [targetDs, setTargetDs] = useState("");
+  const [domainAttachId, setDomainAttachId] = useState("");
+  const [domainSourceDs, setDomainSourceDs] = useState("");
+  const [domainTargetDs, setDomainTargetDs] = useState("");
   const names = datasources.filter(isSupportedDatasource).map((item) => item.name);
   const filtered = filterCatalog(domains, query);
   const attachProfiles = domains.find((item) => item.id === attachDomain)?.profiles ?? [];
@@ -317,6 +320,12 @@ function CatalogPage({
   }, [attachDomain, filtered]);
 
   useEffect(() => {
+    if (!domainAttachId && filtered[0]) {
+      setDomainAttachId(filtered[0].id);
+    }
+  }, [domainAttachId, filtered]);
+
+  useEffect(() => {
     if (attachProfiles.length > 0 && !attachProfiles.some((item) => item.profileId === attachProfile)) {
       setAttachProfile(attachProfiles[0].profileId);
     }
@@ -329,7 +338,33 @@ function CatalogPage({
     if (!targetDs && (names[1] || names[0])) {
       setTargetDs(names[1] ?? names[0]);
     }
-  }, [names, sourceDs, targetDs]);
+    if (!domainSourceDs && names[0]) {
+      setDomainSourceDs(names[0]);
+    }
+    if (!domainTargetDs && (names[1] || names[0])) {
+      setDomainTargetDs(names[1] ?? names[0]);
+    }
+  }, [names, sourceDs, targetDs, domainSourceDs, domainTargetDs]);
+
+  async function attachDomainDefaults(event: FormEvent) {
+    event.preventDefault();
+    onBusy(true);
+    onError(null);
+    try {
+      const updated = await api.attachDomainDatasources(connection, domainAttachId, {
+        source: domainSourceDs,
+        target: domainTargetDs,
+      });
+      onNotice(
+        `Domain ${updated.id} defaults: ${updated.sourceDatasource ?? "—"} → ${updated.targetDatasource ?? "—"}.`,
+      );
+      onRefresh();
+    } catch (err) {
+      onError(message(err));
+    } finally {
+      onBusy(false);
+    }
+  }
 
   async function attach(event: FormEvent) {
     event.preventDefault();
@@ -485,6 +520,23 @@ function CatalogPage({
         ))}
         {supportedSources.length === 0 ? <span className="empty">No Postgres / Mongo / BigQuery datasources.</span> : null}
       </div>
+      <form className="card" onSubmit={(event) => void attachDomainDefaults(event)}>
+        <h2>Domain default datasources</h2>
+        <p className="hint">Profiles inherit these unless they set their own.</p>
+        <div className="row">
+          <SelectField
+            label="Domain"
+            value={domainAttachId}
+            onChange={setDomainAttachId}
+            options={filtered.map((item) => item.id)}
+          />
+          <SelectField label="Source" value={domainSourceDs} onChange={setDomainSourceDs} options={names} />
+          <SelectField label="Target" value={domainTargetDs} onChange={setDomainTargetDs} options={names} />
+          <button className="btn" disabled={busy || !domainAttachId || names.length === 0}>
+            Attach defaults
+          </button>
+        </div>
+      </form>
       <form className="card" onSubmit={(event) => void attach(event)}>
         <h2>Add datasource to a profile</h2>
         <div className="row">
@@ -512,7 +564,9 @@ function CatalogPage({
           <div className="card-head">
             <h2>
               {item.id}
-              {item.schedule ? ` · ${item.schedule}` : ""}
+              {item.sourceDatasource || item.targetDatasource
+                ? ` · defaults ${item.sourceDatasource ?? "—"} → ${item.targetDatasource ?? "—"}`
+                : ""}
               {(item.tags ?? []).length ? ` · tags: ${(item.tags ?? []).join(", ")}` : ""}
             </h2>
             <button

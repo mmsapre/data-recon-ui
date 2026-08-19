@@ -30,7 +30,6 @@ export type Profile = {
   migrationKeyType: string | null;
   migrationKeyColumns: string[];
   hashingStrategy: string | null;
-  schedule: string | null;
   reconMode: string;
   conditionFields: string[];
   tags?: string[];
@@ -38,8 +37,9 @@ export type Profile = {
 
 export type Domain = {
   id: string;
-  schedule: string | null;
   hashingStrategy: string | null;
+  sourceDatasource: string | null;
+  targetDatasource: string | null;
   tags?: string[];
   profiles: Profile[];
 };

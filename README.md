@@ -40,10 +40,10 @@ The Data Recon service allows the UI origin (`DATA_RECON_CORS_ORIGIN`, default `
 
 | Page | What it does |
 |---|---|
-| Search & run | **API dropdowns** for domain/profile quick run, catalog browse, attach datasources |
+| Search & run | **API dropdowns** for domain/profile quick run, catalog browse, attach domain defaults or profile datasources |
 | Run recon | Dedicated execute form: pick domain/profile from `GET /api/domains`, then Run |
 | Audit & status | Domain/profile dropdowns, historical runs, **mismatches on row select**, **time trend chart by profile**, **Export CSV** |
-| Setup | Register **Postgres / Mongo / BigQuery** only; domains/profiles; optional **LLM** url/key/model |
+| Setup | Register **Postgres / Mongo / BigQuery** only; domains (optional default datasources) / profiles; optional **LLM** — runs are API-trigger only (no schedule) |
 
 ### Run flow
 

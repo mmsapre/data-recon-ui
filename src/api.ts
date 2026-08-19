@@ -179,6 +179,15 @@ export const api = {
       c,
       `/api/runs/${runId}/records${status ? `?status=${encodeURIComponent(status)}` : ""}`,
     ),
+  attachDomainDatasources: (
+    c: Connection,
+    domainId: string,
+    body: { source?: string; target?: string },
+  ) =>
+    request<Domain>(c, `/api/domains/${domainId}/datasources`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   attachDatasources: (
     c: Connection,
     domainId: string,

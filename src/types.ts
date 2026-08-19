@@ -89,6 +89,24 @@ export type ReconRunBody = {
   forceFull?: boolean;
 };
 
+/** Body for POST /api/profiles/runs/counts|details — profile by name or id. */
+export type ProfileTriggerBody = {
+  /** Profile id, qualified id (`party.pg-mongo`), or profile name. */
+  profile: string;
+  /** Optional when profile is unique or already qualified. */
+  domain?: string;
+  conditionFields?: string[];
+  forceFull?: boolean;
+};
+
+export type ProfileTriggerResult = {
+  domainId: string;
+  profileId: string;
+  id: string;
+  mode: string;
+  runId: number;
+};
+
 export type Connection = {
   env: EnvName;
   backendUrl: string;

@@ -68,6 +68,37 @@ export function RunPage({
     }
   }
 
+  async function triggerKind(kind: "counts" | "details") {
+    if (!domainId || !profileId) {
+      onError("Select a domain and profile.");
+      return;
+    }
+    onBusy(true);
+    onError(null);
+    const fieldsList = fields
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const body = {
+      profile: `${domainId}.${profileId}`,
+      domain: domainId,
+      conditionFields: fieldsList.length ? fieldsList : undefined,
+      forceFull: forceFull || undefined,
+    };
+    try {
+      const result =
+        kind === "counts"
+          ? await api.runProfileCounts(connection, body)
+          : await api.runProfileDetails(connection, body);
+      onNotice(`Triggered ${result.id} as ${result.mode} (run ${result.runId}).`);
+      onTriggered({ domainId: result.domainId, profileId: result.profileId, runId: result.runId });
+    } catch (err) {
+      onError(message(err));
+    } finally {
+      onBusy(false);
+    }
+  }
+
   if (!connected) {
     return (
       <>
@@ -160,13 +191,33 @@ export function RunPage({
           >
             Run
           </button>
+          {scope === "profile" ? (
+            <>
+              <button
+                className="btn secondary"
+                disabled={busy || !domainId || !profileId}
+                onClick={() => void triggerKind("counts")}
+              >
+                Run counts
+              </button>
+              <button
+                className="btn secondary"
+                disabled={busy || !domainId || !profileId}
+                onClick={() => void triggerKind("details")}
+              >
+                Run details
+              </button>
+            </>
+          ) : null}
         </div>
         {domain && scope === "profile" && profileId ? (
           <p className="hint">
-            Will call{" "}
+            Path run:{" "}
             <code>
               POST /api/domains/{domainId}/profiles/{profileId}/runs
             </code>
+            . Or by name/id: <code>POST /api/profiles/runs/counts|details</code> with{" "}
+            <code>{`{ "profile": "${domainId}.${profileId}" }`}</code>.
           </p>
         ) : null}
         {domain && scope === "domain" ? (

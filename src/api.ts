@@ -5,6 +5,8 @@ import type {
   Domain,
   EnvName,
   Profile,
+  ProfileTriggerBody,
+  ProfileTriggerResult,
   RecRecord,
   ReconRunBody,
   Run,
@@ -152,11 +154,23 @@ export const api = {
       { method: "POST", body: body ? JSON.stringify(body) : undefined },
     ),
   runProfile: (c: Connection, domainId: string, profileId: string, body?: ReconRunBody) =>
-    request<{ domainId: string; profileId: string; runId: number }>(
+    request<{ domainId: string; profileId: string; id: string; mode: string | null; runId: number }>(
       c,
       `/api/domains/${domainId}/profiles/${profileId}/runs`,
       { method: "POST", body: body ? JSON.stringify(body) : undefined },
     ),
+  /** Agent-friendly: resolve profile by name/id and force COUNTS. */
+  runProfileCounts: (c: Connection, body: ProfileTriggerBody) =>
+    request<ProfileTriggerResult>(c, "/api/profiles/runs/counts", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** Agent-friendly: resolve profile by name/id and force MISMATCH_DETAILS. */
+  runProfileDetails: (c: Connection, body: ProfileTriggerBody) =>
+    request<ProfileTriggerResult>(c, "/api/profiles/runs/details", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   runs: (c: Connection, active?: boolean) =>
     request<Run[]>(c, `/api/runs${active ? "?active=true" : ""}`),
   domainRuns: (c: Connection, domainId: string, active?: boolean) =>

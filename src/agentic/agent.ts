@@ -56,7 +56,7 @@ async function runRemoteAgent(
     return {
       reasoning,
       actions: [],
-      text: "Type a request such as “run party pg-pg” or “search profiles csv”.",
+      text: "Type a request such as “run counts party.pg-pg” or “run details pg-mongo”.",
     };
   }
   note(`POST chat to the agent for env ${connection.env}.`);
@@ -115,17 +115,23 @@ async function runLocalAgent(
     return {
       reasoning,
       actions: [],
-      text: "Type a request such as “run party pg-pg” or “search profiles csv”.",
+      text: "Type a request such as “run counts party.pg-pg” or “run details pg-mongo”.",
     };
   }
 
   const domain = matchDomain(domains, text);
   const profile = matchProfile(domains, domain, text);
-  const mode = MODES.find(
-    (item) =>
-      lower.includes(item.toLowerCase()) ||
-      lower.includes(item.replaceAll("_", " ").toLowerCase()),
-  );
+  const kind = matchTriggerKind(lower);
+  const mode =
+    kind === "counts"
+      ? "COUNTS"
+      : kind === "details"
+        ? "MISMATCH_DETAILS"
+        : MODES.find(
+            (item) =>
+              lower.includes(item.toLowerCase()) ||
+              lower.includes(item.replaceAll("_", " ").toLowerCase()),
+          );
   const conditionFields = parseConditionFields(text);
   const forceFull = /\b(force\s*full|full\s*run|forcefull)\b/i.test(text);
 
@@ -136,10 +142,16 @@ async function runLocalAgent(
   );
   note(
     profile
-      ? `Matched profile “${profile.domainId}.${profile.profileId}” (${profile.sourceDatasource} → ${profile.targetDatasource}).`
-      : "No profile id in the catalog matched the message.",
+      ? `Matched profile “${profile.domainId}.${profile.profileId}” / id “${profile.id}” (${profile.sourceDatasource} → ${profile.targetDatasource}).`
+      : "No profile id/name in the catalog matched the message.",
   );
-  note(mode ? `Matched recon mode override “${mode}”.` : "No mode keyword (COUNTS / MISMATCH_DETAILS / FIELD_DETAILS).");
+  note(
+    kind
+      ? `Matched trigger kind “${kind}” (separate counts/details API).`
+      : mode
+        ? `Matched recon mode override “${mode}”.`
+        : "No counts/details/mode keyword; will use path run with profile default unless mode is set.",
+  );
   note(
     conditionFields
       ? `Matched condition fields: ${conditionFields.join(", ")}.`
@@ -159,7 +171,7 @@ async function runLocalAgent(
 
   if (isTrigger(lower) || looksLikeRunShortcut(text, domain, profile)) {
     note(isTrigger(lower) ? "Intent: trigger a recon run." : "Intent: short name looks like a run shortcut.");
-    return triggerReply(connection, reasoning, domain, profile, mode, conditionFields, forceFull, note);
+    return triggerReply(connection, reasoning, domain, profile, kind, mode, conditionFields, forceFull, note);
   }
 
   if (isList(lower)) {
@@ -280,19 +292,54 @@ async function triggerReply(
   reasoning: string[],
   domain: Domain | null,
   profile: Profile | null,
+  kind: "counts" | "details" | null,
   mode: string | undefined,
   conditionFields: string[] | undefined,
   forceFull: boolean,
   note: (step: string) => void,
 ): Promise<AgentReply> {
-  if (!domain) {
-    note("A trigger needs a domain that exists in the catalog.");
+  if (!domain && !profile) {
+    note("A trigger needs a domain or a resolvable profile name/id.");
     return {
       reasoning,
       actions: [],
-      text: "I could not match a domain. Try “run party” or “run party pg-pg”.",
+      text: "I could not match a profile. Try “run counts party.pg-pg” or “run details pg-mongo”.",
     };
   }
+
+  if (profile && (kind === "counts" || kind === "details")) {
+    const body = {
+      profile: profile.id || `${profile.domainId}.${profile.profileId}`,
+      domain: profile.domainId,
+      conditionFields,
+      forceFull: forceFull || undefined,
+    };
+    const path = kind === "counts" ? "/api/profiles/runs/counts" : "/api/profiles/runs/details";
+    note(`Scope: profile ${body.profile} via agent ${kind} endpoint.`);
+    note(`Calling POST ${path}`);
+    const result =
+      kind === "counts"
+        ? await api.runProfileCounts(connection, body)
+        : await api.runProfileDetails(connection, body);
+    note(`API accepted ${result.mode} run id ${result.runId}.`);
+    return {
+      reasoning,
+      actions: [{ name: `POST ${kind}`, detail: `${path} → ${result.runId}` }],
+      text: `Triggered ${result.id} as ${result.mode}. Run id ${result.runId} was accepted.`,
+      focus: { domainId: result.domainId, profileId: result.profileId, runId: result.runId },
+    };
+  }
+
+  const resolvedDomain = domain ?? (profile ? { id: profile.domainId, profiles: [profile] } as Domain : null);
+  if (!resolvedDomain) {
+    note("Could not resolve a domain for the path-style run.");
+    return {
+      reasoning,
+      actions: [],
+      text: "Name a domain or a qualified profile id such as party.pg-pg.",
+    };
+  }
+
   const body: ReconRunBody | undefined =
     mode || conditionFields || forceFull
       ? {
@@ -313,34 +360,34 @@ async function triggerReply(
     note("forceFull=true — FULL scope.");
   }
   if (profile) {
-    note(`Scope: one profile (${domain.id}.${profile.profileId}), not the whole domain.`);
-    note(`Calling POST /api/domains/${domain.id}/profiles/${profile.profileId}/runs`);
-    const result = await api.runProfile(connection, domain.id, profile.profileId, body);
+    note(`Scope: one profile (${profile.domainId}.${profile.profileId}), not the whole domain.`);
+    note(`Calling POST /api/domains/${profile.domainId}/profiles/${profile.profileId}/runs`);
+    const result = await api.runProfile(connection, profile.domainId, profile.profileId, body);
     note(`API accepted profile run id ${result.runId}.`);
     return {
       reasoning,
       actions: [
         {
           name: "POST run profile",
-          detail: `/api/domains/${domain.id}/profiles/${profile.profileId}/runs → ${result.runId}`,
+          detail: `/api/domains/${profile.domainId}/profiles/${profile.profileId}/runs → ${result.runId}`,
         },
       ],
-      text: `Triggered ${domain.id}.${profile.profileId}. Run id ${result.runId} was accepted.`,
-      focus: { domainId: domain.id, profileId: profile.profileId, runId: result.runId },
+      text: `Triggered ${profile.domainId}.${profile.profileId}. Run id ${result.runId} was accepted.`,
+      focus: { domainId: profile.domainId, profileId: profile.profileId, runId: result.runId },
     };
   }
-  note(`Scope: whole domain ${domain.id} (${domain.profiles.length} profile(s)).`);
-  note(`Calling POST /api/domains/${domain.id}/runs`);
-  const result = await api.runDomain(connection, domain.id, body);
+  note(`Scope: whole domain ${resolvedDomain.id} (${resolvedDomain.profiles.length} profile(s)).`);
+  note(`Calling POST /api/domains/${resolvedDomain.id}/runs`);
+  const result = await api.runDomain(connection, resolvedDomain.id, body);
   const ids = Object.entries(result.runIds)
     .map(([name, id]) => `${name}=${id}`)
     .join(", ");
   note(`API accepted domain run ${result.domainRunId}. Profile runs: ${ids || "none"}.`);
   return {
     reasoning,
-    actions: [{ name: "POST run domain", detail: `/api/domains/${domain.id}/runs → ${result.domainRunId}` }],
-    text: `Triggered domain ${domain.id} (domain run ${result.domainRunId}). Profile runs: ${ids || "none"}.`,
-    focus: { domainId: domain.id, runId: result.domainRunId },
+    actions: [{ name: "POST run domain", detail: `/api/domains/${resolvedDomain.id}/runs → ${result.domainRunId}` }],
+    text: `Triggered domain ${resolvedDomain.id} (domain run ${result.domainRunId}). Profile runs: ${ids || "none"}.`,
+    focus: { domainId: resolvedDomain.id, runId: result.domainRunId },
   };
 }
 
@@ -393,12 +440,27 @@ function matchProfile(domains: Domain[], domain: Domain | null, text: string): P
       profile,
       score: Math.max(
         scoreName(profile.profileId, tokens, text),
+        scoreName(profile.id, tokens, text),
         scoreName(`${profile.domainId}.${profile.profileId}`, tokens, text),
       ),
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score);
   return ranked[0]?.profile ?? null;
+}
+
+function matchTriggerKind(lower: string): "counts" | "details" | null {
+  if (/\b(counts?|count\s*only|hash\s*counts?)\b/.test(lower) || lower.includes("counts")) {
+    return "counts";
+  }
+  if (
+    /\b(details?|mismatches?|mismatch\s*details?|field\s*details?)\b/.test(lower) ||
+    lower.includes("mismatch_details") ||
+    lower.includes("field_details")
+  ) {
+    return "details";
+  }
+  return null;
 }
 
 function datasourceNames(
